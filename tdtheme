@@ -1,0 +1,4 @@
+#!/bin/sh
+# Convenience wrapper so the tool can be run as ./tdtheme <command>
+# without worrying about the interpreter or the working directory.
+exec python3 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/cli.py" "$@"

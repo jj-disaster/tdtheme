@@ -1,0 +1,11 @@
+# Transient runtime state - regenerable, not source
+.applied.json
+.tdwrite-snapshot
+__pycache__/
+*.pyc
+
+# Backups are copies of a live TouchDesigner install, created on every apply
+backups/
+
+# macOS
+.DS_Store

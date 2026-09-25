@@ -1,0 +1,8 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchColors
+#
+# Deliberately empty. Applying this restores the shipped TouchDesigner
+# colours, and is the quickest way back to the stock look:
+#
+#   tdtheme apply default
+#

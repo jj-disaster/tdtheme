@@ -1,0 +1,48 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchColors
+#
+# "midnight" - a cooler, deeper network editor with brighter wiring so
+# connections read more clearly against the background.
+#
+# Only the keys listed here are changed. Everything else falls through to
+# the captured baseline, so this stays small and survives TouchDesigner
+# updates that add new colour keys.
+#
+#   tdtheme apply midnight      # switch to it
+#   tdtheme apply default       # back to the stock look
+
+# --- network editor background -------------------------------------------
+worksheet.bg: ["0.05", "0.055", "0.075"]
+worksheet.grid: ["0.12", "0.13", "0.18"]
+worksheet.gridxy: ["0.2", "0.22", "0.32"]
+worksheet.autoscroll.highlight: ["0.16", "0.18", "0.26"]
+
+# --- tiles ----------------------------------------------------------------
+tile.bg: ["0.02", "0.02", "0.03"]
+tile.active.bg: ["0.07", "0.08", "0.11"]
+tile.name.bg: ["0.13", "0.14", "0.18"]
+tile.flag.bg: ["0.18", "0.19", "0.23"]
+tile.connector.bg: ["0.08", "0.09", "0.12"]
+
+# --- wiring ---------------------------------------------------------------
+# Lifted from the shipped 0.2 grey so connections stand out on the
+# darker background. default.tile.line has no `tile.line` twin, so there
+# is no tier-precedence ambiguity here.
+default.tile.line: ["0.35", "0.4", "0.5"]
+tile.dockedconnection.line: ["0.35", "0.4", "0.5"]
+tile.replicatorconnection.line: ["0.35", "0.4", "0.5"]
+tile.extraconnection.line: ["0.45", "0.5", "0.6"]
+tile.hiddenconnection.line: ["0.4", "0.5", "0.44"]
+
+# Amber hover highlight, replacing the stock yellow. Confirmed by probe
+# to be the wire-hover colour.
+tile.connection.hilite1: ["1", "0.85", "0.35"]
+tile.connection.hilite2: ["0.65", "0.45", "0.15"]
+
+# --- generic chrome -------------------------------------------------------
+# These live in the `default.` tier, which is the only tier these keys
+# have. Changing them affects every surface that does not override them.
+default.bg: ["0.14", "0.15", "0.18"]
+default.fg: ["0.72", "0.74", "0.78"]
+default.field.bg: ["0.1", "0.11", "0.14"]
+default.button: ["0.3", "0.32", "0.36"]

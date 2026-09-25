@@ -1,0 +1,66 @@
+#!/bin/sh
+# Settle an open question: does TouchDesigner ever WRITE TouchColors or
+# TouchOptions, or only read them at startup?
+#
+# Earlier versions of this project asserted it rewrites TouchOptions on exit.
+# That came from misreading the user's own edits as TouchDesigner's, and was
+# never verified. The tool no longer claims either behaviour.
+#
+# Usage:
+#   ./check-td-writes record    # run BEFORE launching TouchDesigner
+#   ./check-td-writes check     # run AFTER quitting TouchDesigner
+#
+# If the checksums match, TouchDesigner did not write either file, and
+# applying a theme while it runs is safe. If they differ, it does write, and
+# the tool needs a "re-apply on quit" mechanism.
+
+set -e
+CFG=/Applications/TouchDesigner.app/Contents/Resources/tfs/Config
+SNAP="$(dirname "$0")/.tdwrite-snapshot"
+
+case "$1" in
+  record)
+    md5 -q "$CFG/TouchColors" "$CFG/TouchOptions" > "$SNAP"
+    echo "recorded $(date '+%H:%M:%S'):"
+    sed 's/^/  /' "$SNAP"
+    echo
+    echo "Now launch TouchDesigner, use it however you like, and quit it."
+    echo "Then run:  ./check-td-writes check"
+    ;;
+
+  check)
+    if [ ! -f "$SNAP" ]; then
+      echo "no snapshot found - run './check-td-writes record' first" >&2
+      exit 1
+    fi
+    if pgrep -x TouchDesigner >/dev/null; then
+      echo "TouchDesigner is still running - quit it first, then re-run." >&2
+      exit 1
+    fi
+    after="$(mktemp)"
+    md5 -q "$CFG/TouchColors" "$CFG/TouchOptions" > "$after"
+
+    echo "file            before   after"
+    paste "$SNAP" "$after" | awk 'NR<=2 {
+      printf "  Touch%-12s %s  %s  %s\n", NR, $1, $2, ($1==$2 ? "same" : "CHANGED")
+    }'
+
+    if cmp -s "$SNAP" "$after"; then
+      echo
+      echo "RESULT: unchanged. TouchDesigner did not write either file."
+      echo "        Applying a theme while it runs is safe; a restart is only"
+      echo "        needed for the change to become visible."
+    else
+      echo
+      echo "RESULT: CHANGED. TouchDesigner does write these files."
+      echo "        The tool needs to re-apply after quit, or refuse to run"
+      echo "        while TouchDesigner is open."
+    fi
+    rm -f "$after"
+    ;;
+
+  *)
+    echo "usage: $0 record | check" >&2
+    exit 2
+    ;;
+esac
