@@ -1,4 +1,4 @@
-CHOP.height	300
+CHOP.height	90
 CHOP.width	130
 COMP.height	130
 COMP.width	160
@@ -54,7 +54,7 @@ font.ops.switchbitmap.size	19
 font.ops.switchdelay.msecs	222
 font.relative.size	0
 geo.orthofloor.gridsize	1
-graph.line.alpha	0.8
+graph.line.alpha	0.5
 graph.line.select.alpha	1
 graph.line.select.multsat	1.5
 graph.line.select.multval	1.5

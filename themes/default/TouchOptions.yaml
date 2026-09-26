@@ -1,5 +1,13 @@
 # tdtheme sparse overlay - only keys that differ from baseline.
 # file: TouchOptions
 #
-# Deliberately empty - see TouchColors.yaml in this folder.
+# Intentionally empty - see TouchColors.yaml in this folder for why reset is
+# expressed as an empty overlay rather than a list of shipped values.
+#
+# One caveat worth knowing: `capture` snapshots the install AS IT IS. If you
+# run `capture --force` while TouchDesigner has unsaved UI tweaks, those become
+# the new baseline, and `apply default` will faithfully restore *those* rather
+# than the true vendor state. Capture from a fresh install, or right after a
+# reinstall, to keep the baseline honest. `./tdtheme status` will then show
+# this file matching the install exactly.
 #
