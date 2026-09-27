@@ -222,18 +222,6 @@ class TdFile:
         except ValueError:
             return None
 
-    def number(self, key: str) -> "float | None":
-        value = self.data.get(key)
-        if value is None or not value or not value[0]:
-            return None
-        try:
-            return float(value[0])
-        except ValueError:
-            return None
-
-    def set(self, key: str, value: "list[str] | str") -> None:
-        self.data[key] = [value] if isinstance(value, str) else list(value)
-
 
 def read_bytes(path: Path) -> bytes:
     try:
@@ -465,13 +453,20 @@ def _check_color_fields(target: TdFile, baseline: TdFile) -> "list[Finding]":
     return findings
 
 
-def validate(target: TdFile, baseline: "TdFile | None" = None) -> "list[Finding]":
-    """Check a fully-merged file. Returns findings; errors block the write."""
+def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
+    """Check a fully-merged file against the baseline. Errors block the write.
+
+    `baseline` is required, and every rule here is relative to it: a key is
+    judged by what the baseline ships, not by an absolute rule. It used to
+    default to None, which quietly disabled the colour-arity check - the
+    strictest rule in the file - for any caller who forgot it. Making it
+    required turns that silence into a TypeError.
+    """
     findings: "list[Finding]" = []
     keys = set(target.data)
     keys.discard("")  # blank line, not a real key
 
-    if target.name in COLOR_FILES and baseline is not None:
+    if target.name in COLOR_FILES:
         findings += _check_color_fields(target, baseline)
 
     # Only the option store has size keys; a colour store has no geometry.
@@ -484,7 +479,7 @@ def validate(target: TdFile, baseline: "TdFile | None" = None) -> "list[Finding]
     # a false positive on the untouched shipped file and would make every
     # single apply fail validation.
     if target.name not in COLOR_FILES:
-        baseline_values = baseline.data if baseline is not None else None
+        baseline_values = baseline.data
         for key, value in target.data.items():
             if not key or not SIZE_KEY_RE.search(key) or not value:
                 continue
@@ -502,32 +497,32 @@ def validate(target: TdFile, baseline: "TdFile | None" = None) -> "list[Finding]
                     f"size must be > 0, got {number:g}. This silently destroys "
                     f"layout (see tile.inout.origsize)."
                 ))
-            elif baseline_values is None or baseline_values.get(key) != value:
+            elif baseline_values.get(key) != value:
                 findings.append(Finding(
                     "warning", key,
                     f"size is {number:g}, and the baseline value for this key is "
                     f"not zero - this is likely to break layout"
                 ))
 
-    if baseline is not None:
-        known = set(baseline.data)
-        for key in target.data:
-            if key and key not in known:
+    known = set(baseline.data)
+    for key in target.data:
+        if key and key not in known:
+            findings.append(Finding(
+                "warning", key,
+                "not present in baseline - typo, or added by a newer TouchDesigner"
+            ))
+
+    # Unresolved: when a theme sets both X and default.X we do not know
+    # which wins, so say so rather than guessing.
+    for key in target.data:
+        if key.startswith("default."):
+            specific = key[len("default."):]
+            if specific in keys:
                 findings.append(Finding(
                     "warning", key,
-                    "not present in baseline - typo, or added by a newer TouchDesigner"
+                    f"theme sets both {specific!r} and {key!r}; the precedence "
+                    f"between the two tiers is unverified"
                 ))
-        # Unresolved: when a theme sets both X and default.X we do not know
-        # which wins, so say so rather than guessing.
-        for key in target.data:
-            if key.startswith("default."):
-                specific = key[len("default."):]
-                if specific in keys:
-                    findings.append(Finding(
-                        "warning", key,
-                        f"theme sets both {specific!r} and {key!r}; the precedence "
-                        f"between the two tiers is unverified"
-                    ))
     return findings
 
 

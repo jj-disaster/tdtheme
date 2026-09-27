@@ -85,11 +85,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
-    "IconError", "TiffImage", "Icon",
+    "IconError", "TiffImage",
     "read_tiff", "write_tiff", "describe_tiff",
     "lzw_decode", "lzw_encode",
     "png_bytes", "contact_sheet",
-    "icon_names", "read_icon", "icon_manifest", "capture_icons",
+    "icon_names", "icon_manifest", "capture_icons",
     "diff_icons", "pixel_diff",
     "load_recipe", "apply_recipe", "RECIPE_VERSION",
 ]
@@ -317,8 +317,6 @@ class TiffImage:
     height: int
     pixels: bytes  # len == width * height * 4, RGBA, alpha not premultiplied
 
-    def __len__(self) -> int:
-        return len(self.pixels)
 
     @property
     def size(self) -> "tuple[int, int]":
@@ -988,7 +986,6 @@ def _op_args(function) -> "tuple[set[str], list[str]]":
     return accepted, required
 
 
-
 # ==========================================================================
 # Icon sets on disk
 # ==========================================================================
@@ -1025,26 +1022,6 @@ RECIPE_VERSION = 1
 
 # ==========================================================================
 
-@dataclass
-class Icon:
-    """One icon file: its name, decoded pixels, and where it came from."""
-
-    name: str
-    image: TiffImage
-    raw: bytes
-
-    @property
-    def width(self) -> int:
-        return self.image.width
-
-    @property
-    def height(self) -> int:
-        return self.image.height
-
-    @property
-    def digest(self) -> str:
-        return hashlib.sha256(self.raw).hexdigest()
-
 
 def icon_names(directory) -> "list[str]":
     """Every `.tiff` in `directory`, sorted. Non-TIFF files are ignored."""
@@ -1053,15 +1030,6 @@ def icon_names(directory) -> "list[str]":
         return []
     return sorted(p.name for p in directory.iterdir()
                   if p.is_file() and p.suffix.lower() in (".tiff", ".tif"))
-
-
-def read_icon(path) -> Icon:
-    path = Path(path)
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise IconError(f"cannot read icon {path}: {exc}") from exc
-    return Icon(path.name, read_tiff(raw), raw)
 
 
 def _atomic_write(path, data: bytes) -> None:

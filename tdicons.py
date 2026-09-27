@@ -22,7 +22,7 @@ What this module does
   icon always differs in bytes from the shipped one, so a byte diff overstates
   what a theme changed and the pixel diff is the honest number.
 - **Install** - `capture_icons` takes a baseline from the running app,
-  `copy_icons` installs a theme's set, `restore_icons` undoes it.
+  `copy_icons` installs a theme's set, `icon_diff` reports what changed.
 - **Preview** - `contact_sheet` and `png_bytes` render a set to one PNG.
 
 What a theme ships
@@ -63,20 +63,17 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shutil
 import struct
-import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
-    "IconError", "TiffImage", "Icon",
-    "read_tiff", "describe_tiff", "lzw_decode",
+    "IconError", "TiffImage",     "read_tiff", "describe_tiff", "lzw_decode",
     "png_bytes", "contact_sheet",
-    "icon_names", "read_icon", "icon_manifest", "capture_icons",
-    "diff_icons", "pixel_diff", "copy_icons", "restore_icons",
+    "icon_names", "icon_manifest", "capture_icons",
+    "diff_icons", "pixel_diff", "copy_icons",
 ]
 
 
@@ -221,8 +218,6 @@ class TiffImage:
     height: int
     pixels: bytes  # len == width * height * 4, RGBA, alpha not premultiplied
 
-    def __len__(self) -> int:
-        return len(self.pixels)
 
     @property
     def size(self) -> "tuple[int, int]":
@@ -576,26 +571,6 @@ def contact_sheet(images: "list[tuple[str, TiffImage]]", *, columns: int = 10,
 # Icon sets on disk
 # ==========================================================================
 
-@dataclass
-class Icon:
-    """One icon file: its name, decoded pixels, and where it came from."""
-
-    name: str
-    image: TiffImage
-    raw: bytes
-
-    @property
-    def width(self) -> int:
-        return self.image.width
-
-    @property
-    def height(self) -> int:
-        return self.image.height
-
-    @property
-    def digest(self) -> str:
-        return hashlib.sha256(self.raw).hexdigest()
-
 
 def icon_names(directory) -> "list[str]":
     """Every `.tiff` in `directory`, sorted. Non-TIFF files are ignored."""
@@ -604,15 +579,6 @@ def icon_names(directory) -> "list[str]":
         return []
     return sorted(p.name for p in directory.iterdir()
                   if p.is_file() and p.suffix.lower() in (".tiff", ".tif"))
-
-
-def read_icon(path) -> Icon:
-    path = Path(path)
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise IconError(f"cannot read icon {path}: {exc}") from exc
-    return Icon(path.name, read_tiff(raw), raw)
 
 
 def _atomic_write(path, data: bytes) -> None:
@@ -772,22 +738,3 @@ def copy_icons(source, destination, *, backup=None,               only_changed_a
         _atomic_write(target, raw)
         result["written"].append(name)
     return result
-
-
-def restore_icons(backup, destination) -> "list[str]":
-    """Put a backed-up icon set back. Returns the names restored."""
-    backup = Path(backup)
-    destination = Path(destination)
-    restored = []
-    for name in icon_names(backup):
-        shutil.copy2(backup / name, destination / name)
-        restored.append(name)
-    return restored
-
-
-
-
-#: Ops that decide a pixel's colour from its luminance, and so cannot be
-#: composed - applying one twice is not "twice as much", it is a second
-#: recolour of an already-recoloured image. Everything else is an adjustment
-#: and accumulates normally.

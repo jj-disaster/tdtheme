@@ -229,6 +229,9 @@ def cmd_icons(args) -> int:
     if args.icons_command == "preview":
         return _icons_preview(args)
     raise AssertionError(f"unhandled icons subcommand {args.icons_command!r}")
+    # `icons` uses subparsers(required=True), so exactly one of the branches
+    # above always returns and this is unreachable. It stays as a guard against
+    # a future subcommand being added without a dispatch branch.
 
 
 def _icons_list(args) -> int:
@@ -248,11 +251,11 @@ def _icons_list(args) -> int:
 
 
 def _icons_diff(args) -> int:
-    if args.name is not None:
-        # A theme with no Icons/ is a real state, and indistinguishable from a
-        # typo unless the name is checked first.
-        T.require_theme(args.name)
-    directory = T.theme_icons_dir(args.name) if args.name else T.baseline_icons_dir()
+    # `name` is a required positional here, so it is always set. A theme with
+    # no Icons/ is a real state, and indistinguishable from a typo unless the
+    # name is checked first.
+    T.require_theme(args.name)
+    directory = T.theme_icons_dir(args.name)
     if not directory.is_dir():
         print(f"Theme {args.name!r} has no icon directory, so it does not "
               f"theme icons. The install keeps whatever it has.")
