@@ -51,7 +51,6 @@ Format details that matter, all verified rather than assumed:
 | `diff NAME` | show exactly what a theme changes, old value vs new |
 | `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set) |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
-| `icons build NAME` | regenerate a theme's icons from its recipe |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
 | `icons preview [NAME]` | write a PNG contact sheet so the icons can actually be looked at |
 
@@ -85,9 +84,9 @@ while claiming to be stock. A total overwrite is the only model where switching
 themes cannot leak state. The cost is disk - 1.2 MB across the five shipped
 sets, against a few KB for a delta scheme - and that was an accepted trade.
 
-**Each set is generated from a recipe**, `themes/<name>/icons.recipe.json`, so
-the binary blobs in git are reproducible artefacts rather than the source of
-truth:
+**Each set is generated from a recipe**, which lives in the separate
+`iconforge` tool, so the binary blobs in git are reproducible artefacts rather
+than the source of truth:
 
 ```json
 {
@@ -112,10 +111,15 @@ byte for byte* rather than decode and re-encode. That is what makes
 `apply default` a lossless reset.
 
 ```
-./tdtheme icons build midnight      # regenerate one theme's icons
 ./tdtheme icons diff mono           # by pixel - which icons are actually repainted
 ./tdtheme icons preview             # PNG contact sheet of the baseline
 ```
+
+This tool does not create icon sets. It installs them, checks them and tells
+you what they change; the recipe that produced one lives in `../iconforge`,
+along with the writer that generated it. `tdtheme icons build` used to exist
+here and was removed, because a tool for *importing* other people's themes
+should not be the tool that authors them.
 
 ### What the recipes can and cannot reach
 
@@ -155,7 +159,6 @@ recipe did nothing to them.
 - `tdtheme list` and `tdtheme status` stay byte-level: decoding all five theme
   sets costs 1.5s, and those two are meant to be glanced at. They say "differ
   in bytes" for that reason.
-- `tdtheme icons build` reports the pixel count for the set it just wrote.
 
 ### The alpha trap
 
@@ -320,13 +323,12 @@ update to confirm this still holds for that build.
 
 ```
 tdtheme.py              core library - no argparse, no print, so a GUI can reuse it
-tdicons.py              TIFF/LZW codec, icon transforms, recipes, PNG previews
+tdicons.py              TIFF/LZW reader, icon-set validation and install, PNG previews
 cli.py                  argument parsing and output
 tdtheme                 shell wrapper
 check-td-writes         settles whether TouchDesigner writes these files
 baseline/               captured pristine files + Icons/ + version.json
-themes/<name>/          TouchColors.yaml, TouchOptions.yaml,
-                        icons.recipe.json, Icons/ (generated)
+themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full set)
 backups/<timestamp>/    automatic, before every apply
 testiconsforagents/     PNG contact sheets written by `icons preview`
 tests/                  round-trip gate + library tests + icon tests
@@ -337,12 +339,17 @@ than printing it, so a GUI front-end can be added without touching the core.
 `tdicons.py` is likewise standalone - pure standard library, no third-party
 imaging dependency - so the icon work did not compromise that rule.
 
+`tdicons.py` also no longer writes a TIFF. It reads them, to validate and to
+compare, and copies them, to install. Writing lives in `../iconforge`, which
+carries its own copy of the codec so it stands alone; the duplicated part is
+only the reader, and both copies are held to the same tests.
+
 ## Tests
 
 ```
 python3 tests/test_roundtrip.py    # byte-exact gate
 python3 tests/test_tdtheme.py     # merge/diff/validate/capture/apply/export
-python3 tests/test_icons.py       # TIFF codec, recipes, icon apply
+python3 tests/test_icons.py       # read, validate, diff, apply, preview icons
 ```
 
 All three run against a throwaway copy of the install selected by the

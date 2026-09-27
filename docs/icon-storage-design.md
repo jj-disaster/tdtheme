@@ -10,6 +10,13 @@ The question was: themes currently store all 97 icons, and it would be nicer
 if icons were stored the way `TouchColors` and `TouchOptions` are — sparsely,
 holding only what differs from the baseline.
 
+**Update after the tools were split.** The recipe engine and the TIFF writer
+moved to `../iconforge`, a separate tool for theme authors, and `tdtheme` now
+only reads, validates and installs icon sets. That changes where steps 4 and 5
+below belong: both are authoring concerns and both now live in `iconforge`.
+Steps 1–3 are still about `tdtheme`'s storage model and stay here. Recipe paths
+in this document are written as `iconforge/recipes/<name>.recipe.json`.
+
 ## 1. The analogy holds, but only halfway
 
 The two stores really are sparse overlays, and sparsely for a measured reason.
@@ -50,7 +57,7 @@ overrides 19 semantic ones by name, and the other 78 genuinely need changing.
 
 ## 2. A sparse description already exists
 
-`themes/<name>/icons.recipe.json` is the icon equivalent of the sparse
+`iconforge/recipes/<name>.recipe.json` is the icon equivalent of the sparse
 overlay, and it is already the authored source of truth:
 
 ```json
@@ -177,15 +184,19 @@ step 2, and step 1 is the one that actually saves space.
    This is the commit that removes ~2 MB from the working tree, and the point at
    which the codec-determinism trade-off in §4 becomes real rather than
    theoretical.
-4. **Make `export` write a recipe** instead of copying 97 files, so exporting a
-   hand-touched icon set produces something reviewable. This is the largest
-   piece of new work and should not be bundled with 1–3.
+4. **Make `iconforge` import a hand-touched icon set and write a recipe** for
+   it, so authoring from an existing set produces something reviewable. This is
+   the largest piece of new work and should not be bundled with 1–3. Note that
+   a reverse conversion cannot be exact in general: a recipe is a lossy
+   description of a 97-image edit, so it would be offered as a starting point
+   rather than a guarantee.
 5. **Fix the two footguns in §2** — reject a `match` that carries an extension,
-   and warn when a recolour op leaves a glyph unchanged. Cheap, and a
-   prerequisite for step 4 being trustworthy.
+   and warn when a recolour op leaves a glyph unchanged. Both are in
+   `iconforge` now, and both are cheap.
 
 Steps 1–2 give the storage model the user asked for. Step 3 is where the space
-saving lands. Steps 4–5 are what make the model maintainable over time.
+saving lands. Steps 4–5 are what make the model maintainable over time, and
+both now belong to the authoring tool rather than this one.
 
 ## 6. Decisions already taken
 

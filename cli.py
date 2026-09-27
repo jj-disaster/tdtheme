@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import tdicons
 import tdtheme as T
@@ -119,9 +118,6 @@ def cmd_diff(args) -> int:
         total_icons = len(tdicons.icon_names(T.theme_icons_dir(args.name)))
         print(f"{T.ICONS_DIRNAME}: {len(icon_changes)} of {total_icons} file(s) "
               f"differ from baseline")
-        recipe = T.theme_recipe_path(args.name)
-        if recipe.exists():
-            print(f"    derived by {recipe.name}")
         if icon_changes:
             for icon_name, state in icon_changes.items():
                 print(f"    {icon_name} ({state})")
@@ -153,10 +149,11 @@ def cmd_export(args) -> int:
               f"-> {T.theme_icons_dir(args.name)}")
     print("\nThe theme records only what differs from baseline. Edit the "
           "YAML by hand to build it further.")
-    if icon_names and not T.theme_recipe_path(args.name).exists():
-        print("The icons were copied as-is, so there is no icons.recipe.json "
-              "describing them. Add one and run `tdtheme icons build` to make "
-              "them reproducible.")
+    if icon_names:
+        print("The icons were copied as-is, so this theme is reproducible only "
+              "as bytes. To keep a recipe that describes how they were made, "
+              "use iconforge: python3 ../iconforge/cli.py build "
+              f"{args.name} --check")
     return EXIT_OK
 
 
@@ -250,8 +247,6 @@ def cmd_status(args) -> int:
 def cmd_icons(args) -> int:
     if args.icons_command == "list":
         return _icons_list(args)
-    if args.icons_command == "build":
-        return _icons_build(args)
     if args.icons_command == "diff":
         return _icons_diff(args)
     if args.icons_command == "preview":
@@ -272,59 +267,6 @@ def _icons_list(args) -> int:
             continue
         print(f"  {name:<30} {entry['width']:>4} x {entry['height']:<4} "
               f"{entry['bytes']:>7} B  {entry['sha256'][:12]}")
-    return EXIT_OK
-
-
-def _icons_build(args) -> int:
-    # Only draw a progress bar to a terminal. The carriage returns are correct
-    # on a tty and unreadable in a log or a pipe, where they turn 97 updates
-    # into one enormous line.
-    show_progress = not args.quiet and sys.stdout.isatty()
-
-    def progress(done, total, name):
-        if not show_progress:
-            return
-        end = "\n" if done == total else "\r"
-        print(f"  [{done:>3}/{total}] {name[:44]:<44}", end=end, flush=True)
-
-    try:
-        result = T.build_icons(args.name,
-                               compression=(tdicons.COMPRESSION_NONE
-                                            if args.no_compress
-                                            else tdicons.COMPRESSION_LZW),
-                               progress=progress)
-    except tdicons.IconError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_ERROR
-
-    if show_progress:
-        print()
-    verb = "Rebuilt" if result.get("verbatim") is False else "Wrote"
-    print(f"{verb} icons for theme {args.name!r} into {result['destination']}")
-    print(f"    {result['written']} file(s), {result['bytes'] / 1024:.0f} KB, "
-          f"compression={'none' if result['compression'] == 1 else 'lzw'}")
-    if result.get("verbatim"):
-        print("    copied byte for byte from the baseline (recipe has no ops), "
-              "so `apply default` is a lossless reset")
-    else:
-        print(f"    {result['transformed']} transformed by a recipe op, "
-              f"{result['untransformed']} passed through")
-        # Report pixels, not bytes. A re-encoded theme differs from the shipped
-        # bytes for all 97 files because the Photoshop metadata is dropped, so a
-        # byte count answers a question nobody is asking. The unchanged count
-        # also says something real about the icon set: 69 of the 97 glyphs are
-        # pure white with alpha, so a hue-only op moves them and a
-        # desaturating op does not.
-        _px = result["pixel_identical_to_baseline"]
-        print(f"    {result['written'] - _px} of {result['written']} changed "
-              f"pixels; the other {_px} came out identical to the shipped icon")
-
-    findings = T.validate_icons(args.name)
-    if findings:
-        print()
-        _finding_lines(findings)
-    else:
-        print("    all icons decode, and every one keeps its baseline size")
     return EXIT_OK
 
 
@@ -352,10 +294,10 @@ def _icons_diff(args) -> int:
         return EXIT_OK
 
     # Bytes and pixels disagree here, and only pixels answer the question
-    # anyone is really asking. A generated icon always differs from the shipped
-    # file - it is single-strip, explicitly straight-alpha, and has the ~5 KB of
-    # Photoshop metadata stripped - so the byte count is 97 for every themed
-    # icon set, including `mono`, where a grayscale recipe leaves 79 of the 97
+    # anyone is really asking. An authored icon always differs from the shipped
+    # file - it is single-strip, re-compressed, and has the ~5 KB of Photoshop
+    # metadata stripped - so the byte count is 97 for every themed icon set,
+    # including `mono`, where a grayscale recipe leaves 58 of the 97
     # pixel-for-pixel identical. Reporting only the byte count would make every
     # recipe look equally aggressive.
     pixel_changes = tdicons.pixel_diff(T.baseline_icons_dir(), directory)
@@ -407,8 +349,11 @@ def _icons_preview(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tdtheme",
-        description="Manage TouchDesigner UI themes by editing TouchColors, "
-                    "TouchOptions, and the Icons directory.",
+        description="Install and inspect TouchDesigner UI themes. A theme is a "
+                    "directory of TouchColors.yaml, TouchOptions.yaml and an "
+                    "Icons/ directory of 97 TIFFs, which this tool merges, "
+                    "validates and installs. Authoring icon sets from recipes "
+                    "is a separate tool, iconforge.",
         epilog="TouchDesigner reads TouchColors and TouchOptions at startup and "
                "caches each icon on first use, so restart it to see a change "
                "take effect.",
@@ -449,13 +394,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = icons_sub.add_parser("list", help="list an icon set with sizes and hashes")
     p.add_argument("name", nargs="?",
                    help="theme name; omit to list the baseline set")
-    p.set_defaults(func=cmd_icons)
-
-    p = icons_sub.add_parser("build", help="regenerate a theme's icons from its recipe")
-    p.add_argument("name")
-    p.add_argument("--no-compress", action="store_true",
-                   help="write uncompressed TIFFs (bigger, but trivially readable)")
-    p.add_argument("--quiet", action="store_true", help="suppress per-file progress")
     p.set_defaults(func=cmd_icons)
 
     p = icons_sub.add_parser(

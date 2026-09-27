@@ -44,11 +44,11 @@ __all__ = [
     "merge", "validate", "diff",
     "load_overlay", "dump_overlay",
     "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
-    "icons_dir", "baseline_icons_dir", "theme_icons_dir", "theme_recipe_path",
+    "icons_dir", "baseline_icons_dir", "theme_icons_dir",
     "td_version", "td_running",
     "list_themes", "require_theme", "theme_path",
     "capture", "apply", "export", "status", "plan",
-    "icons_available", "icon_diff", "validate_icons", "build_icons",
+    "icons_available", "icon_diff", "validate_icons",
     "preview_icons",
 ]
 
@@ -122,10 +122,6 @@ def baseline_icons_dir() -> Path:
 
 def theme_icons_dir(name: str) -> Path:
     return themes_dir / name / ICONS_DIRNAME
-
-
-def theme_recipe_path(name: str) -> Path:
-    return themes_dir / name / "icons.recipe.json"
 
 
 # --------------------------------------------------------------------------
@@ -838,40 +834,12 @@ def validate_icons(name: str) -> "list[IconFinding]":
     return findings
 
 
-def build_icons(name: str, *, compression: int = tdicons.COMPRESSION_LZW,
-                progress=None) -> dict:
-    """Generate a theme's icon set from the baseline using its recipe.
-
-    The recipe lives at `themes/<name>/icons.recipe.json`. A theme with an
-    icon directory but no recipe is left alone rather than rebuilt from
-    nothing - the icons may have been placed there by hand, and overwriting
-    them because a JSON file is missing would be an unrequested change.
-    """
-    if name not in list_themes():
-        raise ThemeNotFound(f"no theme {name!r}. Available: {', '.join(list_themes())}")
-    if not icons_available():
-        raise ThemeError(
-            f"no icon directory at {icons_dir()} or {baseline_icons_dir()}; "
-            f"nothing to build from. Run `tdtheme capture --force` first."
-        )
-    recipe_path = theme_recipe_path(name)
-    if not recipe_path.exists():
-        raise ThemeError(
-            f"{recipe_path} does not exist. A recipe is what says how to derive "
-            f"this theme's icons from the baseline; without one there is nothing "
-            f"to build. The existing {theme_icons_dir(name)} was left untouched."
-        )
-    recipe = tdicons.load_recipe(recipe_path)
-    return tdicons.apply_recipe(baseline_icons_dir(), theme_icons_dir(name),
-                                recipe, compression=compression, progress=progress)
-
-
 def _icons_source_dir(name):
     """The icon directory a preview should read.
 
     `name=None` means the baseline. That is not a cosmetic special case: the
     baseline is the thing every theme is diffed against, so it is the only
-    preview that can answer "did the recipe change the icon I think it
+    preview that can answer "did this theme change the icon I think it
     changed, or was that glyph already like this".
 
     A *named* theme never falls back to the baseline. It used to, and that was
@@ -884,7 +852,8 @@ def _icons_source_dir(name):
         if not source.is_dir():
             raise ThemeError(
                 f"theme {name!r} has no {ICONS_DIRNAME}/ directory to preview. "
-                f"Build it with `tdtheme icons build {name}`."
+                f"Generate one with iconforge: "
+                f"`python3 ../iconforge/cli.py build {name}`."
             )
         return source
     baseline = baseline_icons_dir()

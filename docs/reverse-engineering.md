@@ -287,17 +287,18 @@ confirms the check can fail.
 
 ### Byte-level diffing is meaningless here
 
-A regenerated icon is always a different file from the shipped one. It is
-single-strip where five shipped files are not, explicitly straight-alpha where
-95 are premultiplied, and about 5 KB smaller because the Photoshop XMP and IPTC
-blobs (tag 34377 and friends) are dropped. So a sha256 comparison reports all
-97 files as changed even when the recipe altered nothing.
+A generated icon is always a different file from the shipped one. It is
+single-strip where five shipped files are not, re-compressed, and about 5 KB
+smaller because the Photoshop XMP and IPTC blobs (tag 34377 and friends) are
+dropped. So a sha256 comparison reports all 97 files as changed even when the
+recipe altered nothing.
 
 Pixel comparison is the only meaningful measure, and the two disagree sharply:
-`mono` is a pure `grayscale` recipe, and it leaves **79 of 97** icons
-pixel-for-pixel identical. The remaining 18 are the genuinely coloured ones.
-`tdtheme icons diff` decodes to report this; `list` and `status` stay
-byte-level for speed and say so in their wording.
+`mono` is a pure `grayscale` recipe, and it leaves **58 of 97** icons
+pixel-for-pixel identical. The 39 that move are the genuinely coloured ones,
+plus the 23 whose grey edges only became visible once the alpha was read
+correctly. `tdtheme icons diff` decodes to report this; `list` and `status`
+stay byte-level for speed and say so in their wording.
 
 ### Why every theme ships all 97 files
 
@@ -307,6 +308,13 @@ left in the install. There is no fallback to the stock file. A complete
 overwrite is the only model in which switching themes cannot leak state, and it
 is what makes `apply default` a true reset — which is why `default`'s recipe is
 an empty `ops` list meaning *copy the baseline byte for byte*, not re-encode.
+
+Generating those sets is not this tool's job. The recipes and the writer live
+in `../iconforge`, for theme authors; `tdtheme` only reads, validates and
+installs. The one icon set in the repository that no recipe can reproduce is
+`defaultnowarn`'s `WarnFace.tiff`, a hand-placed blanked face that its empty
+recipe does not describe — which is exactly why the generator refuses to
+overwrite an existing set without `--force`.
 
 ---
 
