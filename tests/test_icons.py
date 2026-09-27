@@ -95,17 +95,61 @@ check(BASE.is_dir(), f"baseline icon directory exists at {BASE}")
 names = tdicons.icon_names(BASE) if BASE.is_dir() else []
 check(len(names) == 97, f"baseline holds the 97 shipped icons (found {len(names)})")
 
-# The baseline is the reference every theme diffs against, so if it has drifted
-# from the install then every diff, every validation and every recipe output is
-# being computed against the wrong thing. Worth asserting rather than assuming.
-live = T.TD_CONFIG / T.ICONS_DIRNAME
+# The baseline is the reference every theme diffs against, so what has to hold
+# is not that the *install* equals the baseline - it usually will not, because
+# applying a theme is the tool working - but that the baseline and every theme
+# describe the same 97 glyphs at the same dimensions. That is the invariant a
+# stale baseline would break, and it holds whatever is currently applied.
+installed_names = set(tdicons.icon_names(BASE))
+check(len(installed_names) == 97, "the baseline's 97 icon names are all distinct")
+for theme in sorted(T.list_themes()):
+    directory = T.theme_icons_dir(theme)
+    if not directory.is_dir():
+        continue
+    same = set(tdicons.icon_names(directory)) == installed_names
+    check(same, f"{theme} ships exactly the baseline's 97 icon names")
+
+# A dimension change is the one thing that would render wrongly rather than
+# merely look stale, so it is a hard check across every shipped set.
+resized = []
+for directory in [BASE] + [T.theme_icons_dir(t) for t in T.list_themes()
+                           if T.theme_icons_dir(t).is_dir()]:
+    for name in sorted(tdicons.icon_names(directory)):
+        try:
+            here = tdicons.read_tiff((directory / name).read_bytes())
+            ref = tdicons.read_tiff((BASE / name).read_bytes())
+        except tdicons.IconError as exc:
+            resized.append(f"{directory.name}/{name}: {exc}")
+            continue
+        if (here.width, here.height) != (ref.width, ref.height):
+            resized.append(f"{directory.name}/{name}: "
+                           f"{here.width}x{here.height} != {ref.width}x{ref.height}")
+check(not resized,
+      f"every shipped set keeps the baseline's icon dimensions ({len(resized)} differ)")
+for item in resized[:5]:
+    print(f"        {item}")
+
+# Report which theme the real install currently holds. This used to be a hard
+# check that the install matched the baseline byte for byte, which was wrong:
+# it read the live install through T.TD_CONFIG, a hardcoded constant that
+# ignores TDTHEME_CONFIG, so it also leaked out of this suite's isolation. And
+# it failed the moment anyone applied a theme - treating normal, correct use of
+# the tool as a broken baseline. Knowing *which* theme is applied is worth
+# printing; asserting the install is unthemed is not.
+live = Path("/Applications/TouchDesigner.app/Contents/Resources/tfs/Config") / T.ICONS_DIRNAME
 if live.is_dir():
-    drift = tdicons.diff_icons(BASE, live)
-    check(not drift,
-          f"baseline/Icons still matches the installed set byte for byte "
-          f"({len(drift)} differ)")
+    held = "the baseline (stock)"
+    for theme in T.list_themes():
+        directory = T.theme_icons_dir(theme)
+        if directory.is_dir() and not tdicons.diff_icons(directory, live):
+            held = f"theme {theme!r}"
+            break
+    else:
+        if tdicons.diff_icons(BASE, live):
+            held = "no known theme - edited by hand?"
+    print(f"  note  the live install holds {held}")
 else:
-    print("  skip  no installed Icons/ to compare the baseline against")
+    print("  skip  no real TouchDesigner install to report on")
 
 # ---------------------------------------------------------------- the codec
 
