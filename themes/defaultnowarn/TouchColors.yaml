@@ -1,24 +1,44 @@
 # tdtheme sparse overlay - only keys that differ from baseline.
 # file: TouchColors
 #
-# This theme is intentionally EMPTY - it contains no key/value lines at all.
+# defaultnowarn is a CUSTOM theme. It is not `default`, it is not a reset
+# theme, and it is not stock TouchDesigner. Read this before assuming
+# otherwise - an earlier version of this file was copied from `default/` and
+# described *that* theme, which is how this warning exists.
 #
-# Why empty: `default` is not a stored copy of the shipped colours. It is the
-# absence of overrides. Applying it merges the empty overlay over the captured
-# baseline, which means the result *is* the baseline, byte for byte:
+# What it is: `default`, with one icon blanked.
 #
-#     merge(baseline, {}) == baseline
+# This file and TouchOptions.yaml are both empty overlays, inherited from the
+# copy. So the colours and options this theme applies are the untouched
+# baseline - identical to `default`, key for key. That is deliberate.
 #
-# So reset does not depend on holding a separate pristine copy, and it cannot
-# drift out of sync with the baseline. See `merge()` in tdtheme.py.
+# The entire difference between this theme and `default` is one file:
 #
-# Do NOT list keys here. Pinning values like `CHOP.height: ["90"]` would look
-# more explicit but would freeze them forever - a future TouchDesigner build
-# that changed the shipped value would be silently overridden by this file.
-# An empty overlay always tracks whatever the baseline says for that build.
+#     Icons/WarnFace.tiff    64x64 RGBA, every decoded byte zero
 #
-# Baseline provenance: captured 2026-09-25 from a freshly reinstalled,
-# untouched TouchDesigner 2025.33230, verified byte-identical to the install.
+# `default`'s copy of that icon draws a warning face (4138 non-zero bytes).
+# This one is blank, so the glyph never renders and the warning face is gone
+# from the UI. The other 96 icons are byte-identical to `default`.
 #
-#   ./tdtheme apply default
+# In practice:
 #
+#     apply default         stock colours, stock options, warning face shown
+#     apply defaultnowarn   stock colours, stock options, warning face hidden
+#
+# Neither undoes a theme. This one is a small, deliberate change to the stock
+# look, made because the warning face is noise for anyone who is not looking
+# for it.
+#
+# Two things not to "fix":
+#
+#   - The empty overlay is correct. Filling it in would make this theme
+#     override colours it has no opinion about.
+#   - The icons must not be rebuilt from the recipe. See
+#     tdthememaker/recipes/defaultnowarn.recipe.json: it has no ops *on
+#     purpose*, because a recipe cannot express "this pixel is zero". Building
+#     it would silently put the stock warning face back. `build --check`
+#     refuses and names WarnFace.tiff; `build` needs an explicit --force.
+#
+# This header is hand-written. Re-exporting the theme
+# (`python3 -m tdthememaker.cli export defaultnowarn --force`) rewrites these
+# files with a three-line generated header and loses everything above.
