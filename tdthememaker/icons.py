@@ -5,9 +5,11 @@ installs finished themes; this builds them. It owns the pixel side of
 theming: a TIFF codec, a set of recolour and adjustment ops, and the recipe
 engine that combines them into a complete 97-icon directory.
 
-    python3 tdthememaker.py build midnight
-    python3 tdthememaker.py diff midnight ../tdtheme/themes/midnight/Icons
-    python3 tdthememaker.py preview midnight
+Import it as `tdthememaker.icons`; the command line lives in `cli.py`.
+
+    python3 -m tdthememaker.cli build midnight
+    python3 -m tdthememaker.cli build midnight --check
+    python3 -m tdthememaker.cli preview midnight
 
 What the recipes are for
 ------------------------
@@ -17,7 +19,7 @@ TouchDesigner reads its UI icons from
     TouchDesigner.app/Contents/Resources/tfs/Config/Icons/*.tiff
 
 97 TIFF files, no fallback, loaded once and cached for the process lifetime
-(see `tdtheme/docs/reverse-engineering.md` for how that path was recovered
+(see `../docs/reverse-engineering.md` for how that path was recovered
 from `libUI.dylib`). Colour themes are text overlays, but icons are not text,
 so a theme author has to produce real files. A recipe is the reviewable form
 of that work: a short list of ops that, applied to the shipped baseline,
@@ -34,12 +36,12 @@ The project has a hard rule: no third-party dependencies. Neither Pillow nor
 tifffile is installed here, and asking for them would break that rule. The
 subset needed is small and completely known: 8bpc, RGB/RGBA, photometric 2,
 single strip, LZW or no compression. That is a few hundred lines of `struct`
-arithmetic, and the round-trip is testable - `tests/test_icons.py` decodes all
+arithmetic, and the round-trip is testable - `../tests/test_icons.py` decodes all
 97 shipped files, re-encodes them, and asserts the pixels survive. Where an
 independent check is wanted, `sips` (macOS ImageIO, i.e. a different libtiff)
 is asked to read what we wrote.
 
-The codec is duplicated from `tdtheme/tdicons.py` rather than imported, so
+The codec is duplicated from `../tdicons.py` rather than imported, so
 this tool stands alone and can move to its own repository. Only the read side
 is duplicated; `tdtheme` keeps a reader for validation and never writes TIFFs,
 so the subtle parts - alpha-convention detection, premultiplied round-tripping

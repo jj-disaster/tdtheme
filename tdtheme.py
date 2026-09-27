@@ -834,7 +834,7 @@ def _icons_source_dir(name):
             raise ThemeError(
                 f"theme {name!r} has no {ICONS_DIRNAME}/ directory to preview. "
                 f"Generate one with tdthememaker: "
-                f"`python3 ../tdthememaker/cli.py build {name}`."
+                f"`python3 -m tdthememaker.cli build {name}`."
             )
         return source
     baseline = baseline_icons_dir()

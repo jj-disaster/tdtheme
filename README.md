@@ -70,7 +70,7 @@ from the baseline.
 
 To build one by hand, copy `themes/midnight/` and edit the YAML. To capture
 what you have currently set in TouchDesigner as a new theme, use
-`../tdthememaker` - see [Writing themes](#writing-themes).
+`tdthememaker/` - see [Writing themes](#writing-themes).
 
 ## Icons
 
@@ -116,7 +116,7 @@ byte for byte* rather than decode and re-encode. That is what makes
 ```
 
 This tool does not create icon sets. It installs them, checks them and tells
-you what they change; the recipe that produced one lives in `../tdthememaker`,
+you what they change; the recipe that produced one lives in `tdthememaker/recipes/`,
 along with the writer that generated it. `tdtheme icons build` used to exist
 here and was removed, because a tool for *importing* other people's themes
 should not be the tool that authors them.
@@ -332,6 +332,12 @@ themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full set)
 backups/<timestamp>/    automatic, before every apply
 testiconsforagents/     PNG contact sheets written by `icons preview`
 tests/                  round-trip gate + library tests + icon tests
+tdthememaker/           the authoring tool: recipes, icon generation, export
+  icons.py              TIFF/LZW writer, ops, recipe engine, contact sheets
+  theme.py              export: sparse colour overlay + verbatim icon copy
+  cli.py                list / build / diff / export / preview
+  recipes/              one <name>.recipe.json per theme
+  tests/                the generation and export suite
 ```
 
 `tdtheme.py` deliberately contains no CLI concerns and returns data rather
@@ -340,19 +346,18 @@ than printing it, so a GUI front-end can be added without touching the core.
 imaging dependency - so the icon work did not compromise that rule.
 
 `tdicons.py` also no longer writes a TIFF. It reads them, to validate and to
-compare, and copies them, to install. Writing lives in `../tdthememaker`, which
+compare, and copies them, to install. Writing lives in `tdthememaker/`, which
 carries its own copy of the codec; the duplicated part is only the reader, and
 both copies are held to the same tests.
 
 ## Writing themes
 
 Authoring a theme is the other direction, and it is a separate tool. Generation
-lives in `../tdthememaker`; so does writing a theme out of the live install:
+lives in `tdthememaker/`; so does writing a theme out of the live install:
 
 ```
-cd ../tdthememaker
-python3 cli.py build mytheme          # generate the icon set from a recipe
-python3 cli.py export mytheme         # record the installed state as a theme
+python3 -m tdthememaker.cli build mytheme     # generate the icon set
+python3 -m tdthememaker.cli export mytheme    # record the install as a theme
 ```
 
 `tdthememaker` imports this package's store layer - the restricted YAML parser,
@@ -365,12 +370,13 @@ everything else runs without it.
 ## Tests
 
 ```
-python3 tests/test_roundtrip.py    # byte-exact gate
-python3 tests/test_tdtheme.py      # merge/diff/validate/capture/apply
-python3 tests/test_icons.py       # read, validate, diff, apply, preview icons
+python3 tests/test_roundtrip.py           # byte-exact gate
+python3 tests/test_tdtheme.py             # merge/diff/validate/capture/apply
+python3 tests/test_icons.py               # read, validate, diff, apply, preview
+python3 tdthememaker/tests/test_thememaker.py   # generation + export
 ```
 
-All three run against a throwaway copy of the install selected by the
+The first three run against a throwaway copy of the install selected by the
 `TDTHEME_CONFIG` environment variable, and never write to the real
 TouchDesigner config. `test_icons.py` additionally cross-checks the codec
 against `sips`, so a systematic misreading of the TIFF format cannot pass by

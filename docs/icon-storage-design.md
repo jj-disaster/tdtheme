@@ -11,7 +11,7 @@ if icons were stored the way `TouchColors` and `TouchOptions` are — sparsely,
 holding only what differs from the baseline.
 
 **Update after the tools were split.** The recipe engine and the TIFF writer
-moved to `../tdthememaker`, a separate tool for theme authors, and `tdtheme` now
+moved to `tdthememaker/`, the authoring tool in this repository, and `tdtheme` now
 only reads, validates and installs icon sets. That changes where steps 4 and 5
 below belong: both are authoring concerns and both now live in `tdthememaker`.
 Steps 1–3 are still about `tdtheme`'s storage model and stay here. Recipe paths

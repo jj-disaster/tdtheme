@@ -9,12 +9,12 @@ instructions into a complete 97-icon directory — and it can also record the
 current install as a new theme.
 
 ```
-python3 cli.py list                      # what recipes exist
-python3 cli.py diff mono                 # which icons a set actually repaints
-python3 cli.py build midnight            # regenerate a theme's icons
-python3 cli.py build midnight --check    # report what would change, write nothing
-python3 cli.py export mytheme            # record the installed state as a theme
-python3 cli.py preview midnight          # contact sheet PNG
+python3 -m tdthememaker.cli list                      # what recipes exist
+python3 -m tdthememaker.cli diff mono                 # which icons a set actually repaints
+python3 -m tdthememaker.cli build midnight            # regenerate a theme's icons
+python3 -m tdthememaker.cli build midnight --check    # report what would change, write nothing
+python3 -m tdthememaker.cli export mytheme            # record the installed state as a theme
+python3 -m tdthememaker.cli preview midnight          # contact sheet PNG
 python3 tests/test_thememaker.py         # 120 checks
 ```
 
@@ -109,7 +109,7 @@ an existing set without `--force`, and `--check` names the file that would be
 lost:
 
 ```
-$ python3 cli.py build defaultnowarn --check
+$ python3 -m tdthememaker.cli build defaultnowarn --check
 would write 97 icons from defaultnowarn.recipe.json
     ...
     1 of 97 installed icons would change
@@ -119,7 +119,8 @@ would write 97 icons from defaultnowarn.recipe.json
 ## Layout
 
 ```
-tdthememaker.py      codec, ops, recipe engine, set diffing, contact sheets
+__init__.py          the package, and the two halves it holds
+icons.py             codec, ops, recipe engine, set diffing, contact sheets
 theme.py             export: sparse colour overlay + verbatim icon copy
 cli.py               list / build / diff / export / preview
 recipes/             one <name>.recipe.json per theme
@@ -128,7 +129,7 @@ tests/               test_thememaker.py
 
 ## Two dependencies, and why they differ
 
-The TIFF codec is **duplicated** from `tdtheme/tdicons.py` rather than
+The TIFF codec is **duplicated** from `../tdicons.py` rather than
 imported, so the icon half stands alone and can move to its own repository.
 Only the read side is duplicated — `tdtheme` keeps a reader for validation and
 never writes a TIFF — and both copies are held to equivalent tests.
@@ -145,7 +146,7 @@ One implementation of a format, in the tool that owns it.
 `export` records the live install as a theme, in the form `tdtheme apply` reads:
 
 ```
-python3 cli.py export mytheme
+python3 -m tdthememaker.cli export mytheme
 ```
 
 The two halves are recorded differently, on purpose.

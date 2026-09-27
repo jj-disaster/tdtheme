@@ -33,13 +33,15 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-import tdthememaker as F
+from . import icons as F
 
-HERE = Path(__file__).resolve().parent
-TDTHEME = HERE.parent / "tdtheme"
-
-if str(TDTHEME) not in sys.path:
-    sys.path.insert(0, str(TDTHEME))
+# `tdtheme` is a top-level module in the repository root, one level up. Adding
+# the root is enough to import it, whether this package was reached by
+# `python3 -m tdthememaker.cli` or by a test that put the root on the path
+# already.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import tdtheme as T  # noqa: E402
 

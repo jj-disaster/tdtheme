@@ -30,9 +30,11 @@ from collections import OrderedDict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
+ROOT = HERE.parent.parent          # the repository root
+sys.path.insert(0, str(ROOT))
 
-import tdthememaker  # noqa: E402
+import tdtheme as T  # noqa: E402
+from tdthememaker import icons, theme as G  # noqa: E402
 
 PASS, FAIL = "  ok  ", " FAIL "
 failures: list[str] = []
@@ -64,15 +66,14 @@ def section(title: str) -> None:
 
 
 PROJECT = HERE.parent
-TDTHEME = PROJECT.parent / "tdtheme"
 RECIPES = PROJECT / "recipes"
-BASE = TDTHEME / "baseline" / "Icons"
+BASE = ROOT / "baseline" / "Icons"
 THEMES = ["default", "defaultnowarn", "midnight", "sunset", "mono", "bnw"]
 
 
 def theme_icons_dir(name: str) -> Path:
     """Where a theme's generated set lives: the artifact `tdtheme apply` reads."""
-    return TDTHEME / "themes" / name / "Icons"
+    return ROOT / "themes" / name / "Icons"
 
 
 def theme_recipe_path(name: str) -> Path:
@@ -80,7 +81,7 @@ def theme_recipe_path(name: str) -> Path:
 
 
 tmp = Path(tempfile.mkdtemp(prefix="tdthememaker-"))
-names = tdthememaker.icon_names(BASE)
+names = icons.icon_names(BASE)
 if not names:
     raise SystemExit(f"no baseline icons in {BASE}")
 
@@ -88,7 +89,7 @@ if not names:
 
 section("TIFF codec")
 
-check(tdthememaker.COMPRESSION_NONE == 1 and tdthememaker.COMPRESSION_LZW == 5,
+check(icons.COMPRESSION_NONE == 1 and icons.COMPRESSION_LZW == 5,
       "compression constants match the TIFF spec")
 
 # LZW is the part worth testing hardest. Three bugs in it were found and fixed
@@ -101,15 +102,15 @@ check(tdthememaker.COMPRESSION_NONE == 1 and tdthememaker.COMPRESSION_LZW == 5,
 #   - a TIFF may split its data across several strips, and the shipped set
 #     contains five files that do.
 sample = bytes(range(256)) * 40
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(sample)) == sample,
+check(icons.lzw_decode(icons.lzw_encode(sample)) == sample,
       "LZW round-trips a payload longer than one code table")
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(b"")) == b"",
+check(icons.lzw_decode(icons.lzw_encode(b"")) == b"",
       "LZW round-trips an empty payload")
 flat = bytes([7]) * 100000
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(flat)) == flat,
+check(icons.lzw_decode(icons.lzw_encode(flat)) == flat,
       "LZW round-trips a highly repetitive payload (long runs, one code)")
 ramp = bytes((i * 7919) % 256 for i in range(50000))
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(ramp)) == ramp,
+check(icons.lzw_decode(icons.lzw_encode(ramp)) == ramp,
       "LZW round-trips an incompressible payload (worst case for the table)")
 
 # The table-full path, which the payloads above all miss. They compress well
@@ -122,7 +123,7 @@ check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(ramp)) == ramp,
 def count_clears(data):
     """Re-run the encoder's table policy and report how often it must reset."""
     table, clears = {}, 0
-    next_code, bits = tdthememaker._FIRST_CODE, tdthememaker._MIN_BITS
+    next_code, bits = icons._FIRST_CODE, icons._MIN_BITS
     max_code = (1 << bits) - 1
     prefix = data[0]
     for byte in data[1:]:
@@ -131,16 +132,16 @@ def count_clears(data):
         if found is not None:
             prefix = found
             continue
-        if next_code < tdthememaker._MAX_CODE:
+        if next_code < icons._MAX_CODE:
             table[key] = next_code
             next_code += 1
-            if next_code > max_code and bits < tdthememaker._MAX_BITS:
+            if next_code > max_code and bits < icons._MAX_BITS:
                 bits += 1
                 max_code = (1 << bits) - 1
         else:
             clears += 1
             table = {}
-            next_code, bits = tdthememaker._FIRST_CODE, tdthememaker._MIN_BITS
+            next_code, bits = icons._FIRST_CODE, icons._MIN_BITS
             max_code = (1 << bits) - 1
         prefix = byte
     return clears
@@ -149,19 +150,19 @@ filler = bytes(range(256)) * 2000          # 512000 bytes, far past 4096 codes
 check(count_clears(filler) > 1,
       f"a payload this size exhausts the code table repeatedly "
       f"({count_clears(filler)} resets needed)")
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(filler)) == filler,
+check(icons.lzw_decode(icons.lzw_encode(filler)) == filler,
       "LZW round-trips a payload that fills the table many times over")
-check(tdthememaker.lzw_decode(tdthememaker.lzw_encode(bytes([7]) * 500000))
+check(icons.lzw_decode(icons.lzw_encode(bytes([7]) * 500000))
       == bytes([7]) * 500000,
       "LZW round-trips a half-megabyte of one repeated byte across resets")
 
 # The two real files that used to break libtiff, by size rather than by name,
 # so the test keeps its meaning if the baseline is ever re-captured.
-big = sorted(names, key=lambda n: -(tdthememaker.read_tiff(
-    (BASE / n).read_bytes()).width * tdthememaker.read_tiff(
+big = sorted(names, key=lambda n: -(icons.read_tiff(
+    (BASE / n).read_bytes()).width * icons.read_tiff(
     (BASE / n).read_bytes()).height))[:4]
 fills = [n for n in big if count_clears(
-    tdthememaker.read_tiff((BASE / n).read_bytes()).pixels) > 0]
+    icons.read_tiff((BASE / n).read_bytes()).pixels) > 0]
 check(len(fills) >= 3,
       f"the largest shipped icons are the ones that exhaust the table "
       f"({len(fills)} of the 4 largest)")
@@ -172,24 +173,24 @@ bad_decode, bad_lzw, bad_none = [], [], []
 for icon in names:
     raw = (BASE / icon).read_bytes()
     try:
-        original = tdthememaker.read_tiff(raw)
-    except tdthememaker.IconError as exc:
+        original = icons.read_tiff(raw)
+    except icons.IconError as exc:
         bad_decode.append(f"{icon}: {exc}")
         continue
-    for comp, bucket in ((tdthememaker.COMPRESSION_LZW, bad_lzw),
-                         (tdthememaker.COMPRESSION_NONE, bad_none)):
+    for comp, bucket in ((icons.COMPRESSION_LZW, bad_lzw),
+                         (icons.COMPRESSION_NONE, bad_none)):
         try:
             # Compared through the premultiplied form, not byte-for-byte.
             # Re-encoding is genuinely lossy for a partially transparent pixel -
             # premultiplied 8-bit cannot carry its colour - and demanding exact
             # equality would be asserting something untrue rather than something
             # correct. `_survived_roundtrip` states the real invariant.
-            if not tdthememaker._survived_roundtrip(
-                    tdthememaker.read_tiff(
-                        tdthememaker.write_tiff(original, compression=comp)).pixels,
+            if not icons._survived_roundtrip(
+                    icons.read_tiff(
+                        icons.write_tiff(original, compression=comp)).pixels,
                     original.pixels):
                 bucket.append(f"{icon}: pixels differ")
-        except tdthememaker.IconError as exc:
+        except icons.IconError as exc:
             bucket.append(f"{icon}: {exc}")
 check(not bad_decode,
       f"all {len(names)} shipped icons decode (failures: {bad_decode[:2]})")
@@ -202,7 +203,7 @@ check(not bad_none,
 # truncates, so they are named rather than left to the aggregate count above.
 MULTI_STRIP = ["BypassOverlay.tiff", "Collapse.tiff", "ErrorFaceOverlay.tiff",
                "NoCookOverlay.tiff", "WarnFaceOverlay.tiff"]
-shipped = tdthememaker.icon_manifest(BASE)
+shipped = icons.icon_manifest(BASE)
 found_multi = sorted(n for n, v in shipped.items() if v["strips"] > 1)
 check(found_multi == sorted(MULTI_STRIP),
       f"exactly the 5 overlay icons are multi-strip, and they are decoded "
@@ -234,7 +235,7 @@ for theme in THEMES:
     # `defaultnowarn` additionally carries one hand-placed icon.
     if not (json.loads(recipe_file.read_text()).get("ops") or []):
         continue
-    regen = tdthememaker.icon_manifest(theme_icons_dir(theme))
+    regen = icons.icon_manifest(theme_icons_dir(theme))
     kinds = {v["alpha"] for v in regen.values()}
     check(kinds == {"associated"},
           f"{theme}: regenerated icons declare premultiplied alpha, matching "
@@ -251,19 +252,19 @@ for theme in THEMES:
 # silhouette. So the reader decides from the data.
 def stored_samples(raw):
     """The samples as they sit in the file, before any alpha interpretation."""
-    entries = tdthememaker._ifd_entries(raw, int.from_bytes(raw[4:8], "little"))
-    width = tdthememaker._first_ints(entries, 256, 0)[0]
-    height = tdthememaker._first_ints(entries, 257, 0)[0]
-    comp = tdthememaker._first_ints(entries, 259, 1)[0]
-    samples = tdthememaker._first_ints(entries, 277, 1)[0]
-    offsets = tdthememaker._tag_ints(entries[273])
-    counts = tdthememaker._tag_ints(entries[279])
+    entries = icons._ifd_entries(raw, int.from_bytes(raw[4:8], "little"))
+    width = icons._first_ints(entries, 256, 0)[0]
+    height = icons._first_ints(entries, 257, 0)[0]
+    comp = icons._first_ints(entries, 259, 1)[0]
+    samples = icons._first_ints(entries, 277, 1)[0]
+    offsets = icons._tag_ints(entries[273])
+    counts = icons._tag_ints(entries[279])
     # Each strip is an independent LZW stream with its own Clear code, so a
     # multi-strip file has to be decoded strip by strip rather than as one
     # concatenated blob. Five of the shipped overlays are split this way.
     strips = [raw[o:o + c] for o, c in zip(offsets, counts)]
     if comp == 5:
-        data = b"".join(tdthememaker.lzw_decode(strip) for strip in strips)
+        data = b"".join(icons.lzw_decode(strip) for strip in strips)
     else:
         data = b"".join(strips)
     return data, width, height, samples
@@ -311,7 +312,7 @@ clamped_before = kept_after = 0
 for icon in sorted(MISLABELLED):
     raw = (BASE / f"{icon}.tiff").read_bytes()
     data, w, h, n_samples = stored_samples(raw)
-    px = tdthememaker.read_tiff(raw).pixels
+    px = icons.read_tiff(raw).pixels
     for i in range(0, w * h * n_samples, n_samples):
         if data[i + 3] in (0, 255):
             continue
@@ -327,8 +328,8 @@ check(kept_after > 0 and kept_after < clamped_before,
 # And the write side: output is premultiplied, declared as such, and loses only
 # what premultiplied 8-bit cannot carry - the colour under a=0.
 plain = bytes((200, 100, 50, 0) + (200, 100, 50, 128) + (10, 20, 30, 255))
-enc = tdthememaker.write_tiff(tdthememaker.TiffImage(3, 1, plain),
-                         compression=tdthememaker.COMPRESSION_NONE)
+enc = icons.write_tiff(icons.TiffImage(3, 1, plain),
+                         compression=icons.COMPRESSION_NONE)
 back = stored_samples(enc)[0]
 check(back[:4] == bytes((0, 0, 0, 0)),
       "a fully transparent pixel premultiplies to (0,0,0,0), as it must")
@@ -336,17 +337,17 @@ check(back[4:8] == bytes((100, 50, 25, 128)),
       f"a half-transparent pixel is stored premultiplied (got {tuple(back[4:8])})")
 check(back[8:] == bytes((10, 20, 30, 255)),
       "a fully opaque pixel is stored unchanged")
-check(tdthememaker.describe_tiff(enc)["alpha"] == "associated",
+check(icons.describe_tiff(enc)["alpha"] == "associated",
       "write_tiff declares the data premultiplied")
-check(tdthememaker.describe_tiff(tdthememaker.write_tiff(
-    tdthememaker.TiffImage(3, 1, plain), compression=tdthememaker.COMPRESSION_NONE,
+check(icons.describe_tiff(icons.write_tiff(
+    icons.TiffImage(3, 1, plain), compression=icons.COMPRESSION_NONE,
     premultiplied=False))["alpha"] == "unassociated",
       "premultiplied=False is still available and is declared honestly")
 
 # A generated set is also deliberately not shaped like the shipped one: one
 # strip, always RGBA, and no Photoshop metadata. That is why a byte diff
 # between baseline and theme is not a statement about pixels.
-one_strip = {v["strips"] for v in tdthememaker.icon_manifest(
+one_strip = {v["strips"] for v in icons.icon_manifest(
     theme_icons_dir("midnight")).values()}
 check(one_strip == {1}, f"regenerated icons are single-strip (got {one_strip})")
 
@@ -441,7 +442,7 @@ else:
         source = theme_icons_dir(theme)
         if not source.is_dir():
             continue
-        for icon in sorted(tdthememaker.icon_names(source))[:6]:
+        for icon in sorted(icons.icon_names(source))[:6]:
             target = probe_dir / f"{theme}-{icon}"
             shutil.copy2(source / icon, target)
             made.append(target)
@@ -461,9 +462,9 @@ else:
     #     converts, which forces a real decode.
     libtiff_blind = []
     for icon in names:
-        image = tdthememaker.read_tiff((BASE / icon).read_bytes())
+        image = icons.read_tiff((BASE / icon).read_bytes())
         probe = probe_dir / f"reenc-{icon}"
-        probe.write_bytes(tdthememaker.write_tiff(image, compression=tdthememaker.COMPRESSION_LZW))
+        probe.write_bytes(icons.write_tiff(image, compression=icons.COMPRESSION_LZW))
         out = subprocess.run([SIPS, "-s", "format", "bmp", str(probe),
                               "--out", str(probe_dir / "probe.bmp")],
                              capture_output=True, text=True)
@@ -488,7 +489,7 @@ else:
             check(False, f"sips converts {icon} to PNG")
             continue
         theirs = png_rgba(png)
-        ours = tdthememaker.read_tiff(source.read_bytes()).pixels
+        ours = icons.read_tiff(source.read_bytes()).pixels
         for i in range(0, min(len(ours), len(theirs)), 4):
             if ours[i + 3] == 255:
                 worst = max(worst, max(abs(ours[i + k] - theirs[i + k])
@@ -510,11 +511,11 @@ else:
         if png is None:
             continue
         theirs = png_rgba(png)
-        ours = tdthememaker.read_tiff(source.read_bytes()).pixels
+        ours = icons.read_tiff(source.read_bytes()).pixels
         n = min(len(ours), len(theirs))
         worst_pm = max(worst_pm, max(abs(x - y) for x, y in
-                                     zip(tdthememaker._premultiply(ours[:n]),
-                                         tdthememaker._premultiply(theirs[:n]))))
+                                     zip(icons._premultiply(ours[:n]),
+                                         icons._premultiply(theirs[:n]))))
     check(worst_pm <= 8,
           f"sips agrees with us in premultiplied space across all pixels "
           f"(worst difference {worst_pm}, tolerance 8)")
@@ -539,10 +540,10 @@ else:
                 return bytes(patched)
         raise AssertionError("no ExtraSamples tag to patch")
 
-    image = tdthememaker.read_tiff(
+    image = icons.read_tiff(
         (theme_icons_dir("midnight") / "ErrorFace.tiff").read_bytes())
-    lying = set_extra_samples(tdthememaker.write_tiff(image),
-                              tdthememaker.EXTRA_SAMPLES_UNASSOCIATED)
+    lying = set_extra_samples(icons.write_tiff(image),
+                              icons.EXTRA_SAMPLES_UNASSOCIATED)
     (probe_dir / "lying.tiff").write_bytes(lying)
     png = sips_png(probe_dir / "lying.tiff", probe_dir)
     if png is None:
@@ -559,14 +560,14 @@ else:
     #    file must give the same pixels as reading the honest one, because the
     #    detection in read_tiff looks at the data. This is not hypothetical: 23
     #    of the 97 shipped icons declare premultiplied and are not.
-    check(tdthememaker.read_tiff(lying).pixels == image.pixels,
+    check(icons.read_tiff(lying).pixels == image.pixels,
           "read_tiff ignores a lying ExtraSamples tag and goes by the samples")
 
 # ---------------------------------------------------------------- transforms
 
 section("Transforms")
 
-probe_img = tdthememaker.read_tiff((BASE / "ErrorFace.tiff").read_bytes())
+probe_img = icons.read_tiff((BASE / "ErrorFace.tiff").read_bytes())
 
 alpha_before = probe_img.pixels[3::4]
 for op_name, kwargs in (("grayscale", {"amount": 1.0}),
@@ -576,14 +577,14 @@ for op_name, kwargs in (("grayscale", {"amount": 1.0}),
                         ("saturate", {"amount": 0.5}),
                         ("hue", {"degrees": 45}),
                         ("solid", {"color": [10, 20, 30]})):
-    out = tdthememaker._run_op(probe_img, {"op": op_name, **kwargs})
+    out = icons._run_op(probe_img, {"op": op_name, **kwargs})
     check(out.pixels[3::4] == alpha_before,
           f"op {op_name!r} leaves the alpha channel untouched")
     check(out.size == probe_img.size, f"op {op_name!r} preserves the dimensions")
 
 # grayscale is what `mono` is built on, so assert the property the theme's own
 # comment claims: the output is grey, and it is that pixel's own luminance.
-grey = tdthememaker._run_op(probe_img, {"op": "grayscale", "amount": 1.0})
+grey = icons._run_op(probe_img, {"op": "grayscale", "amount": 1.0})
 not_grey = [i for i in range(0, len(grey.pixels), 4)
             if not (grey.pixels[i] == grey.pixels[i + 1] == grey.pixels[i + 2])]
 check(not not_grey, "grayscale leaves every pixel with r == g == b")
@@ -598,38 +599,38 @@ check(not not_grey, "grayscale leaves every pixel with r == g == b")
 # (255,92,84) into (171,62,56) - 33% too dark - and it hit 19 of the 97 icons
 # in `midnight` and 27 in `sunset`. Every file stayed a valid TIFF and sips
 # agreed with all of it, so nothing noticed.
-WHITE = tdthememaker.TiffImage(1, 1, bytes((255, 255, 255, 255)))
-GREY = tdthememaker.TiffImage(1, 1, bytes((200, 200, 200, 255)))
+WHITE = icons.TiffImage(1, 1, bytes((255, 255, 255, 255)))
+GREY = icons.TiffImage(1, 1, bytes((200, 200, 200, 255)))
 PERIWINKLE, RED = [140, 172, 255], [255, 92, 84]
 
-once = tdthememaker.op_tint(WHITE, RED)
-twice = tdthememaker.op_tint(tdthememaker.op_tint(WHITE, PERIWINKLE), RED)
+once = icons.op_tint(WHITE, RED)
+twice = icons.op_tint(icons.op_tint(WHITE, PERIWINKLE), RED)
 check(tuple(once.pixels[:3]) == tuple(RED),
       f"one tint of white lands on the requested colour (got {tuple(once.pixels[:3])})")
 check(tuple(twice.pixels[:3]) != tuple(RED),
       f"tinting twice does NOT land on it, which is the bug "
       f"({tuple(twice.pixels[:3])} vs {tuple(RED)})")
-check(tuple(tdthememaker.op_tint(WHITE, RED).pixels[:3])
-      != tuple(tdthememaker.op_tint(tdthememaker.op_tint(WHITE, PERIWINKLE), RED).pixels[:3]),
+check(tuple(icons.op_tint(WHITE, RED).pixels[:3])
+      != tuple(icons.op_tint(icons.op_tint(WHITE, PERIWINKLE), RED).pixels[:3]),
       "so the replacement has to be decided by op selection, not by op_tint")
 
 # And through the op selection the recipe path uses, with two matching tints.
-winner, _ = tdthememaker._select_ops([{"op": "tint", "color": PERIWINKLE},
+winner, _ = icons._select_ops([{"op": "tint", "color": PERIWINKLE},
                                  {"op": "tint", "color": RED}])
 check(isinstance(winner, dict) and winner["color"] == RED,
       f"of two matching tints only the last one runs (got {winner})")
-check(tdthememaker._select_ops([{"op": "grayscale"}])[0] is None,
+check(icons._select_ops([{"op": "grayscale"}])[0] is None,
       "an icon with no recolour op has no winner")
 
 # The accumulate half must survive: `bnw` layers contrast 1.5 then 1.7 on
 # purpose, and flattening that to "last op wins" would quietly weaken it.
-one_pass = tdthememaker.op_contrast(tdthememaker.op_grayscale(GREY, 1.0), 1.5)
-two_pass = tdthememaker.op_contrast(tdthememaker.op_contrast(
-    tdthememaker.op_grayscale(GREY, 1.0), 1.5), 1.7)
+one_pass = icons.op_contrast(icons.op_grayscale(GREY, 1.0), 1.5)
+two_pass = icons.op_contrast(icons.op_contrast(
+    icons.op_grayscale(GREY, 1.0), 1.5), 1.7)
 check(tuple(one_pass.pixels[:3]) != tuple(two_pass.pixels[:3]),
       "two contrast passes still compound rather than the second replacing "
       f"the first ({tuple(one_pass.pixels[:3])} then {tuple(two_pass.pixels[:3])})")
-check([s["op"] for s in tdthememaker._select_ops(
+check([s["op"] for s in icons._select_ops(
     [{"op": "grayscale"},
      {"op": "contrast", "amount": 1.5},
      {"op": "contrast", "amount": 1.7}])[1]] == ["grayscale", "contrast", "contrast"],
@@ -669,7 +670,7 @@ def mean_ink(px):
 
 ink = {"neutral": [], "chromatic": []}
 for icon in names:
-    colour = mean_ink(tdthememaker.read_tiff((BASE / icon).read_bytes()).pixels)
+    colour = mean_ink(icons.read_tiff((BASE / icon).read_bytes()).pixels)
     spread = max(colour) - min(colour)
     ink["chromatic" if spread > 12 else "neutral"].append(icon)
 check((len(ink["neutral"]), len(ink["chromatic"])) == (83, 14),
@@ -692,7 +693,7 @@ check({n[:-5] for n in ink["chromatic"]} == CHROMATIC,
 # every visible pixel is exactly (0,0,0), whatever its alpha.
 black_ink = []
 for icon in names:
-    px = tdthememaker.read_tiff((BASE / icon).read_bytes()).pixels
+    px = icons.read_tiff((BASE / icon).read_bytes()).pixels
     visible = [i for i in range(0, len(px), 4) if px[i + 3] > 0]
     if visible and all(px[i] == px[i+1] == px[i+2] == 0 for i in visible):
         black_ink.append(icon)
@@ -704,22 +705,22 @@ check(sorted(black_ink) == ["CommentOffSmall.tiff", "Cook.tiff", "Grid.tiff"],
 # Recipes must fail loudly on a typo, not skip the op and produce a subtly
 # wrong icon set. Each case below was a real failure mode while building this.
 def _recipe_with(spec):
-    return lambda: tdthememaker._run_op(probe_img, spec)
+    return lambda: icons._run_op(probe_img, spec)
 
-raises(tdthememaker.IconError, _recipe_with({"op": "tint", "color": [1, 2, 3], "strenght": 1.0}),
+raises(icons.IconError, _recipe_with({"op": "tint", "color": [1, 2, 3], "strenght": 1.0}),
        "a misspelled op argument is rejected")
-raises(tdthememaker.IconError, _recipe_with({"op": "tintt", "color": [1, 2, 3]}),
+raises(icons.IconError, _recipe_with({"op": "tintt", "color": [1, 2, 3]}),
        "an unknown op is rejected and lists the known ones")
-raises(tdthememaker.IconError, _recipe_with({"op": "tint"}),
+raises(icons.IconError, _recipe_with({"op": "tint"}),
        "a missing required argument is rejected")
-raises(tdthememaker.IconError, _recipe_with({"op": "tint", "color": [1, 2]}),
+raises(icons.IconError, _recipe_with({"op": "tint", "color": [1, 2]}),
        "a two-component colour is rejected")
-raises(tdthememaker.IconError, _recipe_with({"op": "tint", "color": [1, 2, 300]}),
+raises(icons.IconError, _recipe_with({"op": "tint", "color": [1, 2, 300]}),
        "an out-of-range colour channel is rejected")
 
 try:
-    tdthememaker._run_op(probe_img, {"op": "tintt", "color": [1, 2, 3]})
-except tdthememaker.IconError as exc:
+    icons._run_op(probe_img, {"op": "tintt", "color": [1, 2, 3]})
+except icons.IconError as exc:
     check("grayscale" in str(exc) and "tint" in str(exc),
           "the unknown-op error names the ops that do exist")
 
@@ -733,18 +734,18 @@ for theme in THEMES:
         check(False, f"{theme}: recipe exists at {recipe_path}")
         continue
     try:
-        recipe = tdthememaker.load_recipe(recipe_path)
+        recipe = icons.load_recipe(recipe_path)
         ok = True
-    except tdthememaker.IconError as exc:
+    except icons.IconError as exc:
         check(False, f"{theme}: recipe parses ({exc})")
         continue
-    check(ok, f"{theme}: recipe parses and declares version {tdthememaker.RECIPE_VERSION}")
+    check(ok, f"{theme}: recipe parses and declares version {icons.RECIPE_VERSION}")
 
 # The empty-ops case is load-bearing, not an edge case. `default` is the only
 # way back to stock icons, and a theme that writes nothing would leave the
 # previously applied theme's icons in the install.
 empty_out = tmp / "empty-recipe"
-report = tdthememaker.apply_recipe(BASE, empty_out, {"version": 1, "ops": []})
+report = icons.apply_recipe(BASE, empty_out, {"version": 1, "ops": []})
 check(report["verbatim"] is True, "an empty recipe reports itself as verbatim")
 check(report["written"] == len(names),
       f"an empty recipe writes all {len(names)} icons")
@@ -767,15 +768,15 @@ for theme in THEMES:
     out = tmp / f"rebuild-{theme}"
     if not theme_recipe_path(theme).exists():
         continue
-    recipe = tdthememaker.load_recipe(theme_recipe_path(theme))
+    recipe = icons.load_recipe(theme_recipe_path(theme))
     try:
-        rep = tdthememaker.apply_recipe(BASE, out, recipe)
-    except tdthememaker.IconError as exc:
+        rep = icons.apply_recipe(BASE, out, recipe)
+    except icons.IconError as exc:
         check(False, f"{theme}: recipe builds (raised {exc})")
         continue
     check(rep["written"] == len(names),
           f"{theme}: rebuild writes all {len(names)} icons")
-    check(all(tdthememaker.read_tiff((out / n).read_bytes()) is not None for n in names),
+    check(all(icons.read_tiff((out / n).read_bytes()) is not None for n in names),
           f"{theme}: every rebuilt icon decodes")
     print(f"         ({rep['written'] - rep['pixel_identical_to_baseline']} of "
           f"{rep['written']} changed pixels)")
@@ -804,15 +805,15 @@ for theme in THEMES:
         continue
     out = tmp / f"repro-{theme}"
     try:
-        tdthememaker.apply_recipe(BASE, out, json.loads(recipe_file.read_text()))
-    except tdthememaker.IconError as exc:
+        icons.apply_recipe(BASE, out, json.loads(recipe_file.read_text()))
+    except icons.IconError as exc:
         check(False, f"{theme}: recipe builds (raised {exc})")
         continue
     shipped = theme_icons_dir(theme)
     if not shipped.is_dir():
         check(False, f"{theme}: has a generated Icons/ directory")
         continue
-    differing = [n for n in sorted(tdthememaker.icon_names(shipped))
+    differing = [n for n in sorted(icons.icon_names(shipped))
                  if (out / n).read_bytes() != (shipped / n).read_bytes()]
     if theme == "defaultnowarn":
         check(differing == ["WarnFace.tiff"],
@@ -826,22 +827,22 @@ for theme in THEMES:
 # And the failure this protects against is silent, so assert the guard too: a
 # rebuild that would drop the hand-placed file has to be visible before anyone
 # runs it.
-sys.path.insert(0, str(PROJECT))
-import cli as thememaker_cli  # noqa: E402
+from tdthememaker import cli as thememaker_cli  # noqa: E402
 
 probe = subprocess.run(
-    [sys.executable, str(PROJECT / "cli.py"), "build", "defaultnowarn", "--check"],
-    capture_output=True, text=True)
+    [sys.executable, "-m", "tdthememaker.cli", "build",
+     "defaultnowarn", "--check"],
+    capture_output=True, text=True, cwd=ROOT)
 check(probe.returncode == 2 and "WarnFace.tiff" in probe.stdout,
       f"`build --check` flags the hand-placed icon instead of overwriting it "
       f"(exit {probe.returncode})")
 
 refuse = subprocess.run(
-    [sys.executable, str(PROJECT / "cli.py"), "build", "defaultnowarn"],
-    capture_output=True, text=True)
+    [sys.executable, "-m", "tdthememaker.cli", "build", "defaultnowarn"],
+    capture_output=True, text=True, cwd=ROOT)
 check(refuse.returncode == 1 and "--force" in refuse.stderr,
       "`build` refuses to overwrite an existing set without --force")
-check(tdthememaker.read_tiff(
+check(icons.read_tiff(
     (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes()) is not None,
     "the hand-placed icon survived every command above")
 
@@ -852,9 +853,6 @@ section("export")
 # Export is the newest half of this tool and the one that writes a format
 # another tool has to read, so the checks below are mostly about the handoff:
 # a theme written here must be one `tdtheme apply` can install, byte for byte.
-
-import theme as G  # noqa: E402
-import tdtheme as T  # noqa: E402
 
 # The reader lives in tdtheme and the writer lives here. If those two ever
 # disagree, themes this tool writes become unreadable, so pin the agreement.
@@ -876,7 +874,7 @@ export_tmp = Path(tempfile.mkdtemp(prefix="tdthememaker-export-"))
 install_dir = export_tmp / "install"
 install_dir.mkdir()
 for store in ("TouchColors", "TouchOptions"):
-    shutil.copy2(TDTHEME / "baseline" / store, install_dir / store)
+    shutil.copy2(ROOT / "baseline" / store, install_dir / store)
 shutil.copytree(BASE, install_dir / "Icons")
 themes_dir = export_tmp / "themes"
 
@@ -953,7 +951,7 @@ try:
     check(False, "export refuses an install with a missing store")
 except G.ExportError as exc:
     check("TouchOptions" in str(exc), f"export names the missing store ({exc})")
-shutil.copy2(TDTHEME / "baseline" / "TouchOptions", install_dir / "TouchOptions")
+shutil.copy2(ROOT / "baseline" / "TouchOptions", install_dir / "TouchOptions")
 
 # The CLI must fail with a message, not a traceback. Called in-process rather
 # than through a subprocess: `themes_dir` has no environment override, so a
@@ -971,17 +969,17 @@ shutil.rmtree(export_tmp, ignore_errors=True)
 
 # This tool writes into the tdtheme repository, so confirm it did not. The
 # paths above are all redirected, and this catches a new one being added.
-check(sorted(p.name for p in (TDTHEME / "themes").iterdir() if p.is_dir())
+check(sorted(p.name for p in (ROOT / "themes").iterdir() if p.is_dir())
       == sorted(THEMES),
       "the real themes directory is exactly the six committed themes")
-check(not (TDTHEME / ".applied.json").read_text().count('"e2e"'),
+check(not (ROOT / ".applied.json").read_text().count('"e2e"'),
       "the real last-applied marker was not overwritten")
-check((TDTHEME / "backup_probe_marker").exists() is False,
+check((ROOT / "backup_probe_marker").exists() is False,
       "no stray files were written into the tdtheme repository")
 
 # The hand-placed icon check above ran against the real theme; make sure the
 # temp-dir games above did not touch it.
-check(tdthememaker.read_tiff(
+check(icons.read_tiff(
     (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes()) is not None,
     "the hand-placed icon is still intact after the export tests")
 

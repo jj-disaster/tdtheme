@@ -25,14 +25,14 @@ import json
 import sys
 from pathlib import Path
 
-import theme as G
-import tdthememaker as F
+from . import icons as F
+from . import theme as G
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 RECIPES = HERE / "recipes"
-TDTHEME = HERE.parent / "tdtheme"
-BASELINE = TDTHEME / "baseline" / "Icons"
-THEMES = TDTHEME / "themes"
+BASELINE = ROOT / "baseline" / "Icons"
+THEMES = ROOT / "themes"
 
 EXIT_OK, EXIT_ERROR, EXIT_CHANGED = 0, 1, 2
 
