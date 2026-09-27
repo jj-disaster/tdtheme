@@ -11,6 +11,7 @@ Run:  python3 tests/test_tdtheme.py
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -21,7 +22,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import tdtheme as T  # noqa: E402
+import tdtheme as T
+
+
+def overlay_text(data, name=""):
+    """A sparse overlay, in the subset format `tdthememaker export` writes.
+
+    Written out by hand here on purpose. A theme is a human-editable artifact,
+    so the thing worth testing is that apply reads a file a person wrote, not
+    that a writer and a reader agree with each other.
+    """
+    lines = ["# tdtheme sparse overlay - only keys that differ from baseline.",
+             f"# file: {name}", ""]
+    for key, value in data.items():
+        if key:
+            lines.append(f"{key}: [{', '.join(json.dumps(v) for v in value)}]")
+    return "\n".join(lines) + "\n"  # noqa: E402
 
 PASS, FAIL = "  ok  ", " FAIL "
 failures: list[str] = []
@@ -94,7 +110,16 @@ sample = OrderedDict([
     ("tile.connection.hilite1", ["1", "0", "0"]),
     ('key.with"quote', ['a"b', "", "x y"]),
 ])
-text = T.dump_overlay(sample, "TouchOptions")
+# The writer for this subset moved to tdthememaker with `export`; the reader
+# stayed, because applying a theme needs it. A literal stands in for the writer
+# here, and tdthememaker's suite checks that the two agree.
+text = ("# tdtheme sparse overlay - only keys that differ from baseline.\n"
+        "# file: TouchOptions\n"
+        "\n"
+        'tile.border.size: ["5"]\n'
+        'font.default.face: [""]\n'
+        'tile.connection.hilite1: ["1", "0", "0"]\n'
+        'key.with"quote: ["a\\"b", "", "x y"]\n')
 loaded = T.load_overlay(text, "TouchOptions")
 check(loaded == sample, "overlay round-trips through loader")
 
@@ -671,42 +696,26 @@ check((T.baseline_dir / T.TOUCHCOLORS).read_bytes()
       == (install / T.TOUCHCOLORS).read_bytes(),
       "baseline bytes match the install exactly")
 
-# ---------------------------------------------------------------- export
-
-print()
-print("Export")
-print("-" * 60)
-
-exported = T.export("empty")
-for store, path in exported.items():
-    overlay = T.load_overlay(path.read_text(), path.name)
-    check(overlay == OrderedDict(), f"export of an unmodified install is empty ({store})")
-raises(T.ThemeError, lambda: T.export("empty"), "export refuses to clobber an existing theme")
-
-# Use sentinel values that cannot collide with whatever the real install
-# currently holds, so the test does not depend on the install being pristine.
-SENTINEL_A = ["0.25", "0.5", "0.75"]
-SENTINEL_B = ["0.1", "0.2", "0.3"]
-(install / T.TOUCHCOLORS).write_bytes(
-    T.merge(colors_base, OrderedDict([
-        ("tile.connection.hilite1", SENTINEL_A),
-        ("default.tile.line", SENTINEL_B),
-    ])).to_bytes()
-)
-exported = T.export("probe")
-sparse = T.load_overlay(T.theme_path("probe", T.TOUCHCOLORS).read_text())
-check(set(sparse) == {"tile.connection.hilite1", "default.tile.line"},
-      "export records only the changed keys")
-check(sparse["tile.connection.hilite1"] == SENTINEL_A,
-      "export records the new value verbatim")
-check(T.theme_path("probe", T.TOUCHOPTIONS).exists(),
-      "export writes a file for both stores even when one is unchanged")
-
 # ---------------------------------------------------------------- apply
 
 print()
 print("Apply")
 print("-" * 60)
+
+# The theme to apply. `export` used to create this one; it now lives in
+# tdthememaker, so build it here as a hand-written overlay - which is what a
+# theme usually is anyway.
+sparse = OrderedDict([
+    ("tile.connection.hilite1", ["0.25", "0.5", "0.75"]),
+    ("default.tile.line", ["0.1", "0.2", "0.3"]),
+])
+T.themes_dir.mkdir(parents=True, exist_ok=True)
+probe_dir = T.themes_dir / "probe"
+probe_dir.mkdir(parents=True, exist_ok=True)
+for store in T.STORE_FILES:
+    T.write_file(T.theme_path("probe", store),
+                 overlay_text(sparse if store == T.TOUCHCOLORS else OrderedDict(),
+                              store).encode())
 
 # Applying a theme that was exported from the current install would be a
 # no-op, so move the install somewhere else first. That makes the backup
@@ -769,10 +778,16 @@ state = T.status()
 check(not state.clean, "status detects drift after an external edit")
 check(state.drift[T.TOUCHCOLORS] == 1, "status counts the drifted key")
 
-T.export("e2e", force=True)
+# Writing a theme from a modified install moved to tdthememaker (`export`).
+# What remains is the half this tool owns: apply a theme, and land it exactly.
+(T.themes_dir / "e2e").mkdir(parents=True, exist_ok=True)
+for store in T.STORE_FILES:
+    sparse = T.diff(T.load_baseline()[store], T.load_file(install / store, store))
+    T.write_file(T.theme_path("e2e", store),
+                 overlay_text(sparse, store).encode())
 T.apply("e2e")
 check((install / T.TOUCHCOLORS).read_bytes() == edited.to_bytes(),
-      "export then apply reproduces the edited file byte-for-byte")
+      "apply reproduces the edited file byte-for-byte")
 
 # "Clean" means "matches baseline", so a theme that genuinely changes
 # something should still show drift. The applied-theme marker is what

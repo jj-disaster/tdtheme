@@ -4,7 +4,7 @@ This module is deliberately half a codec. `tdtheme` loads themes other people
 made, so it needs to *read* icons - to validate them and to tell whether a
 theme actually repainted anything - and to *copy* finished sets into place. It
 does not need to create them. Generating an icon set from a recipe lives in
-`../iconforge`, a separate tool for theme authors, and nothing here writes a
+`../tdthememaker`, a separate tool for theme authors, and nothing here writes a
 TIFF.
 
 The one thing that makes reading non-obvious is alpha. See "The alpha trap"

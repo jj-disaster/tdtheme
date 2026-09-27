@@ -310,7 +310,7 @@ is what makes `apply default` a true reset — which is why `default`'s recipe i
 an empty `ops` list meaning *copy the baseline byte for byte*, not re-encode.
 
 Generating those sets is not this tool's job. The recipes and the writer live
-in `../iconforge`, for theme authors; `tdtheme` only reads, validates and
+in `../tdthememaker`, for theme authors; `tdtheme` only reads, validates and
 installs. The one icon set in the repository that no recipe can reproduce is
 `defaultnowarn`'s `WarnFace.tiff`, a hand-placed blanked face that its empty
 recipe does not describe — which is exactly why the generator refuses to

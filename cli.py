@@ -76,7 +76,7 @@ def cmd_capture(args) -> int:
 def cmd_list(args) -> int:
     themes = T.list_themes()
     if not themes:
-        print("No themes yet. Create one with:  tdtheme export <name>")
+        print("No themes yet. Create one with:  tdthememaker export <name>")
         return EXIT_OK
     applied = T.applied_theme()
     for name in themes:
@@ -131,29 +131,6 @@ def cmd_diff(args) -> int:
         print("This theme changes nothing.")
     _finding_lines(result["findings"])
     _finding_lines(result["icon_findings"])
-    return EXIT_OK
-
-
-def cmd_export(args) -> int:
-    written = T.export(args.name, force=args.force)
-    print(f"Exported current TouchDesigner state as theme {args.name!r}:")
-    for store in T.STORE_FILES:
-        if store not in written:
-            continue
-        path = written[store]
-        overlay = T.load_overlay(path.read_text(), path.name)
-        print(f"    {store:<14} {len(overlay)} key(s) -> {path}")
-    icon_names = [n for n in written if n not in T.STORE_FILES]
-    if icon_names:
-        print(f"    {'Icons':<14} {len(icon_names)} file(s) copied verbatim "
-              f"-> {T.theme_icons_dir(args.name)}")
-    print("\nThe theme records only what differs from baseline. Edit the "
-          "YAML by hand to build it further.")
-    if icon_names:
-        print("The icons were copied as-is, so this theme is reproducible only "
-              "as bytes. To keep a recipe that describes how they were made, "
-              "use iconforge: python3 ../iconforge/cli.py build "
-              f"{args.name} --check")
     return EXIT_OK
 
 
@@ -352,8 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Install and inspect TouchDesigner UI themes. A theme is a "
                     "directory of TouchColors.yaml, TouchOptions.yaml and an "
                     "Icons/ directory of 97 TIFFs, which this tool merges, "
-                    "validates and installs. Authoring icon sets from recipes "
-                    "is a separate tool, iconforge.",
+                    "validates and installs. Authoring - generating icon sets "
+                    "from recipes, and exporting the current state as a new "
+                    "theme - is a separate tool, tdthememaker.",
         epilog="TouchDesigner reads TouchColors and TouchOptions at startup and "
                "caches each icon on first use, so restart it to see a change "
                "take effect.",
@@ -370,11 +348,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("status", help="show build, baseline and drift")
     p.set_defaults(func=cmd_status)
-
-    p = sub.add_parser("export", help="save the current state as a new theme")
-    p.add_argument("name")
-    p.add_argument("--force", action="store_true", help="overwrite an existing theme")
-    p.set_defaults(func=cmd_export)
 
     p = sub.add_parser("diff", help="show what a theme changes")
     p.add_argument("name")

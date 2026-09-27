@@ -47,7 +47,6 @@ Format details that matter, all verified rather than assumed:
 | `capture` | snapshot the installed files and icons as the baseline (refuses to clobber; `--force`) |
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
-| `export NAME` | save the currently installed state as a new theme |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
 | `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set) |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
@@ -70,7 +69,8 @@ new keys. A full copy would silently drop them; an overlay inherits them
 from the baseline.
 
 To build one by hand, copy `themes/midnight/` and edit the YAML. To capture
-what you have currently set in TouchDesigner, `export` it.
+what you have currently set in TouchDesigner as a new theme, use
+`../tdthememaker` - see [Writing themes](#writing-themes).
 
 ## Icons
 
@@ -85,7 +85,7 @@ themes cannot leak state. The cost is disk - 1.2 MB across the five shipped
 sets, against a few KB for a delta scheme - and that was an accepted trade.
 
 **Each set is generated from a recipe**, which lives in the separate
-`iconforge` tool, so the binary blobs in git are reproducible artefacts rather
+`tdthememaker` tool, so the binary blobs in git are reproducible artefacts rather
 than the source of truth:
 
 ```json
@@ -116,7 +116,7 @@ byte for byte* rather than decode and re-encode. That is what makes
 ```
 
 This tool does not create icon sets. It installs them, checks them and tells
-you what they change; the recipe that produced one lives in `../iconforge`,
+you what they change; the recipe that produced one lives in `../tdthememaker`,
 along with the writer that generated it. `tdtheme icons build` used to exist
 here and was removed, because a tool for *importing* other people's themes
 should not be the tool that authors them.
@@ -215,8 +215,8 @@ suspicious.
   inside a field, and be numeric. This catches the real corruption of typing
   a space where a tab belongs - `worksheet.grid 0.317 0.189 <TAB> 0.15` merges
   two channels into one field, and `parse` and `serialize` both accept it
-  silently, so without this rule the bad value survives `export` and `apply`
-  writes it into the install. The rules are relative to the baseline, so the
+  silently, so without this rule the bad value survives being written out and
+  `apply` writes it into the install. The rules are relative to the baseline, so the
   two shipped `dialog.commenthint*` keys keep their 4-field shape and all 626
   pristine keys validate clean.
 - Colour channels are **never clamped**. The shipped `POP.hilite` contains
@@ -340,15 +340,33 @@ than printing it, so a GUI front-end can be added without touching the core.
 imaging dependency - so the icon work did not compromise that rule.
 
 `tdicons.py` also no longer writes a TIFF. It reads them, to validate and to
-compare, and copies them, to install. Writing lives in `../iconforge`, which
-carries its own copy of the codec so it stands alone; the duplicated part is
-only the reader, and both copies are held to the same tests.
+compare, and copies them, to install. Writing lives in `../tdthememaker`, which
+carries its own copy of the codec; the duplicated part is only the reader, and
+both copies are held to the same tests.
+
+## Writing themes
+
+Authoring a theme is the other direction, and it is a separate tool. Generation
+lives in `../tdthememaker`; so does writing a theme out of the live install:
+
+```
+cd ../tdthememaker
+python3 cli.py build mytheme          # generate the icon set from a recipe
+python3 cli.py export mytheme         # record the installed state as a theme
+```
+
+`tdthememaker` imports this package's store layer - the restricted YAML parser,
+the sparse differ, the field-integrity rules - rather than copying it, because
+it is the side that *writes* that format. A second implementation of the writer
+would mean themes this tool produces that `tdtheme apply` cannot read. `export`
+is therefore the one part of `tdthememaker` that needs `tdtheme` present;
+everything else runs without it.
 
 ## Tests
 
 ```
 python3 tests/test_roundtrip.py    # byte-exact gate
-python3 tests/test_tdtheme.py     # merge/diff/validate/capture/apply/export
+python3 tests/test_tdtheme.py      # merge/diff/validate/capture/apply
 python3 tests/test_icons.py       # read, validate, diff, apply, preview icons
 ```
 

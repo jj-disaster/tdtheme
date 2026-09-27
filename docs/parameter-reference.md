@@ -360,7 +360,8 @@ live:     worksheet.grid <TAB> "0.317 0.189" <TAB> 0.15
 
 The first colour channel had been replaced by two numbers separated by a
 **space** instead of a tab — a hand-editing slip, not a valid encoding.
-`tdtheme export` faithfully captured the malformed value, and at the time
+`export` (then `tdtheme export`, now `tdthememaker export`) faithfully
+captured the malformed value, and at the time
 `tdtheme validate` returned **zero findings** for it, because validation
 skipped `TouchColors` entirely and no arity rule existed. `apply` would have
 written the corruption straight back into the install.

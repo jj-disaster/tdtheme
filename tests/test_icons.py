@@ -4,7 +4,7 @@ This is the half of the icon layer that stayed in `tdtheme`. It covers reading
 a theme's icons, checking they are complete and sound, reporting what a theme
 actually changes, and installing a set into a config directory. Writing icons
 is not tested here because this tool no longer does it - the writer, the ops
-and the recipe engine live in `../iconforge`, with their own suite.
+and the recipe engine live in `../tdthememaker`, with their own suite.
 
 The icon work is the one part of this tool that writes binary files into an
 application bundle, so the assertions here are mostly about the ways that can go
@@ -93,7 +93,7 @@ T.backups_dir = tmp / "backups"
 shutil.copytree(PROJECT / "baseline", T.baseline_dir)
 shutil.copytree(PROJECT / "themes", T.themes_dir)
 
-def iconforge_geometry(icon):
+def thememaker_geometry(icon):
     """(width, height) as this tool's reader sees it."""
     image = tdicons.read_tiff((BASE / icon).read_bytes())
     return image.width, image.height
@@ -202,7 +202,7 @@ else:
         out = subprocess.run(
             [SIPS, "-g", "pixelWidth", "-g", "pixelHeight", str(BASE / icon)],
             capture_output=True, text=True)
-        want = iconforge_geometry(icon)
+        want = thememaker_geometry(icon)
         got = [int(line.split(":")[-1]) for line in out.stdout.splitlines()
                if "pixel" in line]
         if got != list(want):

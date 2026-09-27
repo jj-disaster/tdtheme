@@ -42,12 +42,12 @@ __all__ = [
     "TdFile", "Finding", "Status", "IconFinding",
     "parse", "serialize", "load_file", "read_bytes", "write_file",
     "merge", "validate", "diff",
-    "load_overlay", "dump_overlay",
+    "load_overlay",
     "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
     "icons_dir", "baseline_icons_dir", "theme_icons_dir",
     "td_version", "td_running",
     "list_themes", "require_theme", "theme_path",
-    "capture", "apply", "export", "status", "plan",
+    "capture", "apply", "status", "plan",
     "icons_available", "icon_diff", "validate_icons",
     "preview_icons",
 ]
@@ -283,25 +283,6 @@ def _have_yaml() -> bool:
     return True
 
 
-def dump_overlay(data: "OrderedDict[str, list[str]]", name: str = "") -> str:
-    """Render a sparse overlay as restricted YAML.
-
-    An overlay describes key overrides, not a file image, so the empty key
-    (a blank line) is skipped rather than emitted as invalid YAML. Blank
-    lines present in the baseline survive `apply` because merging starts
-    from the baseline.
-    """
-    out = ["# tdtheme sparse overlay - only keys that differ from baseline.",
-           f"# file: {name}" if name else "# file:",
-           ""]
-    for key, value in data.items():
-        if not key:
-            continue
-        rendered = ", ".join(json.dumps(v) for v in value)
-        out.append(f"{key}: [{rendered}]")
-    return "\n".join(out) + "\n"
-
-
 def load_overlay(text: str, name: str = "") -> "OrderedDict[str, list[str]]":
     """Parse restricted-YAML overlay text. Accepts bare scalars as 1-field lists."""
     try:
@@ -344,7 +325,7 @@ def _coerce_overlay_value(key: str, value, where: str) -> "list[str]":
 
 
 def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]":
-    """Zero-dependency loader for the restricted subset dump_overlay emits."""
+    """Zero-dependency loader for the restricted subset a theme overlay uses."""
     data: "OrderedDict[str, list[str]]" = OrderedDict()
     for lineno, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.strip()
@@ -439,8 +420,8 @@ def _check_color_fields(target: TdFile, baseline: TdFile) -> "list[Finding]":
     `0.317 0.189 <TAB> 0.15` - two channels merged into one field by a space
     where a tab belonged. `parse` accepts it without complaint, `serialize`
     faithfully reproduces it, and the result is a file TouchDesigner cannot
-    read - so the bad value survived `export`, and `validate` reported
-    nothing at all. Nothing downstream checks field integrity.
+    read - so the bad value survived being written back out, and `validate`
+    reported nothing at all. Nothing downstream checks field integrity.
 
     Every rule is stated *relative to the baseline* rather than absolutely.
     An absolute "exactly three numeric fields" would false-positive the two
@@ -852,8 +833,8 @@ def _icons_source_dir(name):
         if not source.is_dir():
             raise ThemeError(
                 f"theme {name!r} has no {ICONS_DIRNAME}/ directory to preview. "
-                f"Generate one with iconforge: "
-                f"`python3 ../iconforge/cli.py build {name}`."
+                f"Generate one with tdthememaker: "
+                f"`python3 ../tdthememaker/cli.py build {name}`."
             )
         return source
     baseline = baseline_icons_dir()
@@ -971,31 +952,6 @@ def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
         "warnings": warnings,
         "td_running": running,
     }
-
-
-def export(name: str, *, force: bool = False) -> "dict[str, Path]":
-    """Write the currently installed stores out as a sparse theme."""
-    if not force and name in list_themes():
-        raise ThemeError(
-            f"theme {name!r} already exists. Use --force to overwrite it."
-        )
-    baseline = load_baseline()
-    cfg = config_dir()
-    written = {}
-    directory = themes_dir / name
-    directory.mkdir(parents=True, exist_ok=True)
-    for store in STORE_FILES:
-        installed = load_file(cfg / store, store)
-        sparse = diff(baseline[store], installed)
-        path = theme_path(name, store)
-        write_file(path, dump_overlay(sparse, store).encode())
-        written[store] = path
-    if icons_available():
-        # Copy the installed icons verbatim, for the same reason the baseline
-        # does: `export` records what is installed, and re-encoding would make
-        # it impossible to tell later whether the install or the codec changed.
-        written.update(tdicons.capture_icons(icons_dir(), theme_icons_dir(name)))
-    return written
 
 
 def status() -> Status:
