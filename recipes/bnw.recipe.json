@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "_comment": [
+    "bnw - hue removed AND mid-tones removed, so the glyphs stay legible.",
+    "",
+    "This theme is not `mono`. Where mono keeps each key's shipped luminance and",
+    "only discards hue, bnw also flattens most of the greys and carries its",
+    "hierarchy by inversion - a black panel, a white field, black text on it.",
+    "The icons have to match that or they become the only soft, low-contrast",
+    "thing left in the interface.",
+    "",
+    "So: full grayscale first, then a contrast push around a 128 pivot. The",
+    "push is what removes the mid-tones. It is the icon-side equivalent of the",
+    "theme's four-tone palette, and it is why the opacity 1.0 icons survive as",
+    "crisp shapes instead of dissolving into grey.",
+    "",
+    "The four-state flags (Square/Diamond/Cross/Check, on and off) are the most",
+    "contrast-sensitive icons in the set - they are distinguished from each",
+    "other by value alone, and a theme that compresses values makes them",
+    "ambiguous. Hence amount 1.7 rather than the 1.5 used for everything else.",
+    "",
+    "46 of the 97 icons move. The other 51 cannot: all 83 neutral-ink glyphs are",
+    "already at an extreme - white, or in 3 cases pure black - and",
+    "`(255-128)*1.5+128` clamps straight back to 255 for every one of them. A",
+    "contrast op has nothing to do to a glyph that is already at an extreme,",
+    "which is why this theme, unlike `midnight` and `sunset`, leaves the bulk of",
+    "the icon set looking exactly as shipped."
+  ],
+  "ops": [
+    { "match": "*", "op": "grayscale", "amount": 1.0 },
+    { "match": "*", "op": "contrast", "amount": 1.5 },
+
+    { "match": "*Flag", "op": "contrast", "amount": 1.7 },
+    { "match": "Star*", "op": "contrast", "amount": 1.7 },
+    { "match": "Dot", "op": "contrast", "amount": 1.7 },
+    { "match": "Collapse20x20", "op": "contrast", "amount": 1.7 },
+    { "match": "Expand20x20", "op": "contrast", "amount": 1.7 },
+    { "match": "Up", "op": "contrast", "amount": 1.7 },
+    { "match": "Info*", "op": "contrast", "amount": 1.7 },
+    { "match": "Help*", "op": "contrast", "amount": 1.7 }
+  ]
+}

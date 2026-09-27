@@ -1,0 +1,9 @@
+# Contact sheets written by `preview` - regenerable from the recipe, not source
+preview/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
