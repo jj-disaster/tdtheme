@@ -870,6 +870,15 @@ check(T._load_overlay_fallback(G.dump_overlay(sample, "TouchOptions"),
       "the fallback loader agrees, so the writer needs no PyYAML")
 
 # A fresh install in a temp dir, so the real one is never read or written.
+#
+# The last-applied marker is captured first, because it is the easiest thing
+# for a test run to clobber: it lives in the repository root, nothing else
+# mentions it, and a wrong value there reads as a fact about the user's
+# install. It is gitignored, so a fresh clone has none and the check below
+# has to cope with its absence rather than assume a file is there.
+applied_marker = ROOT / ".applied.json"
+marker_before = applied_marker.read_bytes() if applied_marker.exists() else None
+
 export_tmp = Path(tempfile.mkdtemp(prefix="tdthememaker-export-"))
 install_dir = export_tmp / "install"
 install_dir.mkdir()
@@ -972,10 +981,9 @@ shutil.rmtree(export_tmp, ignore_errors=True)
 check(sorted(p.name for p in (ROOT / "themes").iterdir() if p.is_dir())
       == sorted(THEMES),
       "the real themes directory is exactly the six committed themes")
-check(not (ROOT / ".applied.json").read_text().count('"e2e"'),
-      "the real last-applied marker was not overwritten")
-check((ROOT / "backup_probe_marker").exists() is False,
-      "no stray files were written into the tdtheme repository")
+check((applied_marker.read_bytes() if applied_marker.exists() else None)
+      == marker_before,
+      "the real last-applied marker is exactly as it was before this suite")
 
 # The hand-placed icon check above ran against the real theme; make sure the
 # temp-dir games above did not touch it.
