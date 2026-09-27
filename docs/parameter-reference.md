@@ -386,10 +386,35 @@ YAML rather than reaching for `--force`.
 
 ### 9.4 `validate` cannot see semantic mistakes
 
-It checks three things only: tile geometry at zero, size keys against the
-baseline, and unknown keys. It cannot tell that a colour is illegible against
-its background, that two keys should have been changed together (§5.4), or
-that a value is a typo for another key.
+It checks four things: tile geometry at zero, size keys against the baseline,
+unknown keys, and colour-channel field integrity (§9.3). It cannot tell that a
+colour is illegible against its background, that two keys should have been
+changed together (§5.4), or that a value is a typo for another key.
+
+### 9.5 Icon validation is a separate pass
+
+Everything above concerns the two colour stores. Icons are validated
+independently, by `validate_icons`, and a theme can have a structurally perfect
+colour store and still ship a wrong or incomplete icon set. `tdtheme apply` runs
+both and refuses to write if either reports an error.
+
+`validate_icons` checks four things, and like the colour pass it cannot see
+semantics:
+
+| Check | Severity | Catches |
+|---|---|---|
+| the set is non-empty | error | a theme that would install no icons at all |
+| every file decodes as TIFF | error | a file TouchDesigner cannot read at all — it logs "Couldn't find icon" and draws nothing |
+| dimensions match the baseline | error | a resized glyph; TouchDesigner sizes most of these from the file, so it renders visibly wrong |
+| a name is not in the baseline | warning | a new icon, or one from a different TouchDesigner build — it will be written, but nothing here can vouch for it |
+| a baseline icon is missing from the theme | warning | harmless (the icon keeps its shipped bytes) but almost always means the set was generated from a stale baseline |
+
+Two limits worth stating. The decode check confirms the *file* is readable, not
+that it looks right: an icon whose alpha convention is wrong decodes cleanly and
+renders blocky, which is why the alpha traps in `docs/reverse-engineering.md`
+are checked against `sips` in the test suite rather than inferred here. And a
+warning is not a failure — it is a note that the set and the baseline disagree
+in a way a human should look at.
 
 ---
 

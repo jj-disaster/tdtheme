@@ -913,7 +913,9 @@ check(T.theme_path("probe", "TouchOptions").exists(),
 copied = T.theme_icons_dir("probe")
 check(all((copied / n).read_bytes() == (BASE / n).read_bytes() for n in names),
       "every exported icon is byte-identical to the source")
-check(not any(n.endswith(".tmp") for n in os.listdir(copied)),
+# `_atomic_write` names its temp file "<name>.tmp<pid>", so a leftover ends in
+# the PID, not in ".tmp". Matching on the suffix never fired; this one can.
+check(not any(".tmp" in n for n in os.listdir(copied)),
       "no temp files are left behind in the exported icon set")
 
 try:
