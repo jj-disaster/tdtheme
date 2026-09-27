@@ -242,16 +242,42 @@ plausible-looking garbage. They must be decoded strip by strip.
 codes when the table reaches 4094 entries, not at 4096. Getting this off by one
 means codes written at 12 bits are read back at 13.
 
-**3. Premultiplied alpha — the expensive one.** 95 of 97 icons store
-*premultiplied* (associated) alpha. TIFF 6.0 leaves the convention **undefined**
-when `SamplesPerPixel` is 4 and no `ExtraSamples` tag is present, and in
-practice decoders assume *premultiplied*: libtiff, Photoshop and macOS `sips`
-included. A reader that treats them as straight alpha renders every glyph too
-light; a writer that emits straight-alpha data without saying so has every
-reader multiply alpha in a second time, and the icon renders too dark with its
-thinnest anti-aliased strokes gone. Nothing errors — the file is a valid TIFF,
-it just looks wrong. The fix is to emit `ExtraSamples = 2` (unassociated)
-explicitly.
+**3. Premultiplied alpha — the expensive one, in both directions.** 95 of 97
+icons *declare* premultiplied (associated) alpha. Two separate traps live here,
+and this project fell into both before getting it right.
+
+*On reading: the tag lies.* 23 of those 95 contain **straight** samples. The
+mistake is decidable, not a judgement call: in genuine premultiplied data no
+channel can exceed alpha, so one pixel with `max(RGB) > alpha` refutes the tag.
+`Bypass.tiff` violates that on 98 of 102 partial-alpha pixels; the 68 genuine
+cases violate it zero times. Un-premultiplying on the strength of the tag alone
+turns `(102,102,102,a=91)` into `(285,285,285)`, which clamps to white, and the
+antialiasing ramp collapses — a 16×16 glyph becomes a blocky silhouette. The
+reader therefore decides from the samples; 6 icons carry only 0/255 alpha and
+are undecidable either way.
+
+*On writing: match the renderer, not the specification.* TIFF 6.0 leaves the
+convention undefined when `SamplesPerPixel` is 4, and libtiff, Photoshop and
+`sips` all assume premultiplied when the tag is absent. It is tempting to
+resolve that ambiguity by emitting `ExtraSamples = 2` and declaring straight
+data explicitly, since that satisfies every generic decoder. It is also wrong
+here, because the only decoder that matters is TouchDesigner's, and it
+composites premultiplied — `libPOP.dylib` carries explicit `premult`,
+`premultcolor` and `premultrgbbyalpha` handling. A premultiplied compositor
+evaluates `src + bg·(1−a)`, so straight-alpha data draws every antialiased edge
+pixel at full strength: the gaps between strokes close and small glyphs go
+blocky. Measured on a 24×24 glyph, the icon rendered **2.83× too heavy**, and
+regenerated sets came out 1.3–1.8× heavier than the shipped ones. So output is
+premultiplied and declares `ExtraSamples = 1`.
+
+Note the corollary: a premultiplied 8-bit file cannot carry the colour of a
+nearly-transparent pixel, so the write is lossy by construction. `(100,100,100,
+a=2)` premultiplies to `(1,1,1,2)`, which un-premultiplies to `(128,128,128,
+2)` — a 28-point error from a perfectly correct file. Fidelity therefore has to
+be judged in premultiplied space, which is also the space the renderer uses. The
+same applies on read, and a fully transparent pixel must be stored as
+`(0,0,0,0)`: leaving its colour alone inverts it from invisible to fully opaque,
+and 50 pixels across a generated set are affected.
 
 This is the one claim in the project that is verified against a decoder we did
 not write: `tests/test_icons.py` converts generated files with `sips`, reads
@@ -297,8 +323,8 @@ an empty `ops` list meaning *copy the baseline byte for byte*, not re-encode.
 - **Live reload / scripting API for these files.** Port 8888 is Jupyter, not
   TouchDesigner. No usable API found — hence apply-then-restart.
 - **Runtime tinting of icons.** Nothing in `libUI` suggests the glyphs are
-  colour-managed or modulated by a `TouchColors` key. The 69 pure-white icons
-  are white in the file, and the themes reach them by rewriting the file.
+  colour-managed or modulated by a `TouchColors` key. The 83 neutral-ink icons
+  are achromatic in the file, and the themes reach them by rewriting the file.
 
 ### Not covered (three more theming systems)
 

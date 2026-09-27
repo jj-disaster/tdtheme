@@ -33,7 +33,7 @@ Format details that matter, all verified rather than assumed:
 - `TouchOptions` has 183 keys. Some values are legitimately empty
   (`font.default.face`, `font.mono.face`).
 - The two files share **zero** keys - disjoint namespaces.
-- The 97 icons are 69 pure-white-with-alpha glyphs, 3 pure-black, and 25
+- The 97 icons are 83 neutral-ink glyphs, 3 of them pure black, and 14
   genuinely coloured. 89 are LZW-compressed, 8 are not, and 5 are split across
   multiple strips. See [Icons](#icons) below.
 - The stores round-trip byte-for-byte through this tool. That invariant is
@@ -122,21 +122,32 @@ byte for byte* rather than decode and re-encode. That is what makes
 Worth knowing before writing one, because it is a property of the shipped files
 rather than of any theme:
 
-- **69 of the 97 are pure white with alpha.** A hue op moves all of them; a
-  desaturating op moves none of them.
-- **3 are pure black with alpha** - `Cook`, `Grid`, `CommentOffSmall`. There is
-  no hue in a black pixel, so `tint` leaves them alone. That is the right
-  outcome: they are dark ink drawn on a light tile, and recolouring them would
-  break the field they sit on.
-- **25 are genuinely coloured** - the error and warning faces, the yellow star.
-  Only these move under `grayscale`, which is why `mono` repaints 18 of 97 and
-  `bnw` 25 of 97 while looking like a complete theme.
+- **83 of the 97 have neutral ink** - white or black, with alpha doing all the
+  work. A hue op moves them completely; a desaturating op moves none of them.
+- **3 of those are pure black with alpha** - `Cook`, `Grid`, `CommentOffSmall`.
+  There is no hue in a black pixel, so `tint` leaves them alone. That is the
+  right outcome: they are dark ink drawn on a light tile, and recolouring them
+  would break the field they sit on. They are counted separately because they
+  are the one case where a recolour op silently does nothing.
+- **14 are genuinely coloured** - the error and warning faces, the `Origin`
+  axes, the script/python markers. Only these move under `grayscale`, so `mono`
+  repaints 39 of 97 and `bnw` 46 of 97 while looking like a complete theme.
+  Both counts are higher than the 18/25 an earlier version of this file gave:
+  the 23 mislabeled icons have soft grey edges that only became visible once
+  they were read as straight alpha, and those edges are what a desaturating or
+  contrast op can act on.
+
+The 83/14 split is measured from each icon's alpha-weighted mean ink colour and
+holds for any chromaticity threshold from 6 to 20, with a gap from 4.5 to 23.0
+between the 15th and 14th values. An earlier version of this file claimed 69
+white / 3 black / 25 coloured; that count was an artefact of the
+mislabeled-alpha bug described under [The alpha trap](#the-alpha-trap) below,
+which drove the soft edges of 23 icons to solid white.
 
 ### Bytes are not pixels
 
 A regenerated icon is *always* a different file from the shipped one: it is
-single-strip, explicitly straight-alpha, and has ~5 KB of Photoshop metadata
-stripped out. So a byte comparison reports all 97 files as changed even when the
+single-strip, re-compressed, and has ~5 KB of Photoshop metadata stripped out. So a byte comparison reports all 97 files as changed even when the
 recipe did nothing to them.
 
 - `tdtheme icons diff` decodes and compares **pixels**, which is the honest
@@ -148,17 +159,41 @@ recipe did nothing to them.
 
 ### The alpha trap
 
-**95 of the 97 shipped icons store premultiplied alpha.** TIFF leaves the alpha
-convention undefined when `SamplesPerPixel` is 4 and no `ExtraSamples` tag is
-present, and in practice decoders assume *premultiplied*. This tool un-premultiplies
-on read, transforms in straight alpha, and therefore **must** write
-`ExtraSamples = 2` (unassociated) explicitly.
+Two traps, both silent, both of which this tool fell into first.
 
-Getting this wrong is silent. The file is a perfectly valid TIFF, it decodes
-without complaint, and it renders too dark with its thinnest strokes gone.
-`tests/test_icons.py` pins it down by converting generated files with `sips` -
-an independent decoder - and requiring a **max channel difference of 0** against
-our own reading, plus a counterfactual proving the check can fail.
+**1. Do not trust the `ExtraSamples` tag.** 95 of the 97 shipped icons declare
+premultiplied alpha - and 23 of those are lying. They contain straight samples.
+That is decidable rather than a matter of taste: in genuine premultiplied data
+no channel can exceed alpha, so a single pixel with `max(RGB) > alpha` refutes
+the tag. `Bypass.tiff` violates the invariant on 98 of its 102 partial-alpha
+pixels; the 68 genuine cases violate it zero times, so the two populations are
+cleanly separated. Believing the tag un-premultiplies `(102,102,102,a=91)` into
+`(285,285,285)`, which clamps to white, and the whole edge ramp collapses -
+a 16x16 glyph becomes a blocky silhouette. So `read_tiff` decides from the
+samples and treats the tag as metadata about intent.
+
+**2. Write premultiplied, because that is what TouchDesigner composites.**
+This tool un-premultiplies on read so the transforms can reason in straight
+alpha, and then has to multiply back on the way out. The temptation is to
+declare the result `ExtraSamples = 2` (unassociated) on the grounds that TIFF
+leaves the convention undefined and generic decoders assume associated. That is
+true of libtiff, Photoshop and image viewers, and irrelevant here: the one
+decoder that matters is TouchDesigner's, and it wants the same convention as the
+files it already ships. `libPOP.dylib` carries explicit `premult`,
+`premultcolor` and `premultrgbbyalpha` handling.
+
+Writing straight alpha into a premultiplied compositor is not cosmetic. The
+compositor computes `src + bg*(1-a)`, so a pixel with alpha 13/255 whose colour
+is the full tint lands at luma 171 instead of 8.8. Every antialiased edge pixel
+draws at full strength, which closes the gaps between strokes and makes small
+glyphs read as pixelated. Measured on a 24x24 glyph, the whole icon came out
+**2.83x too heavy**.
+
+Getting either wrong is silent. The file is a perfectly valid TIFF, it decodes
+without complaint, and it renders wrong. `tests/test_icons.py` pins it down by
+converting generated files with `sips` - an independent decoder - requiring a
+**max channel difference of 0** at full opacity, and adding a counterfactual
+that forges a mislabeled file to prove the check can fail.
 
 ## Validation
 

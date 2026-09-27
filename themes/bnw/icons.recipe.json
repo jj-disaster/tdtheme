@@ -19,11 +19,12 @@
     "other by value alone, and a theme that compresses values makes them",
     "ambiguous. Hence amount 1.7 rather than the 1.5 used for everything else.",
     "",
-    "25 of the 97 icons move. The other 72 cannot: 69 are pure white with alpha",
-    "and 3 are pure black, and `(255-128)*1.5+128` clamps straight back to 255",
-    "for both. A contrast op has nothing to do to a glyph that is already at an",
-    "extreme - which is why this theme, unlike `midnight` and `sunset`, leaves",
-    "the bulk of the icon set looking exactly as shipped."
+    "46 of the 97 icons move. The other 51 cannot: all 83 neutral-ink glyphs are",
+    "already at an extreme - white, or in 3 cases pure black - and",
+    "`(255-128)*1.5+128` clamps straight back to 255 for every one of them. A",
+    "contrast op has nothing to do to a glyph that is already at an extreme,",
+    "which is why this theme, unlike `midnight` and `sunset`, leaves the bulk of",
+    "the icon set looking exactly as shipped."
   ],
   "ops": [
     { "match": "*", "op": "grayscale", "amount": 1.0 },

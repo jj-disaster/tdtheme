@@ -1,0 +1,24 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchColors
+#
+# This theme is intentionally EMPTY - it contains no key/value lines at all.
+#
+# Why empty: `default` is not a stored copy of the shipped colours. It is the
+# absence of overrides. Applying it merges the empty overlay over the captured
+# baseline, which means the result *is* the baseline, byte for byte:
+#
+#     merge(baseline, {}) == baseline
+#
+# So reset does not depend on holding a separate pristine copy, and it cannot
+# drift out of sync with the baseline. See `merge()` in tdtheme.py.
+#
+# Do NOT list keys here. Pinning values like `CHOP.height: ["90"]` would look
+# more explicit but would freeze them forever - a future TouchDesigner build
+# that changed the shipped value would be silently overridden by this file.
+# An empty overlay always tracks whatever the baseline says for that build.
+#
+# Baseline provenance: captured 2026-09-25 from a freshly reinstalled,
+# untouched TouchDesigner 2025.33230, verified byte-identical to the install.
+#
+#   ./tdtheme apply default
+#

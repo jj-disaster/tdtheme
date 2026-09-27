@@ -300,6 +300,29 @@ def lzw_encode(data: bytes) -> bytes:
                 if next_code > max_code and bits < _MAX_BITS:
                     bits += 1
                     max_code = (1 << bits) - 1
+            else:
+                # The table is full, and this is where the format requires a
+                # Clear code: emit one at the current width, start over.
+                #
+                # Carrying on with a frozen dictionary appears to work and does
+                # not. This module's own decoder tolerates it, so a round-trip
+                # test passes and proves nothing - but libtiff rejects the strip
+                # outright, with no usable error message. That is how 2 of the 97
+                # shipped icons came to be re-encodable by us and readable by
+                # nobody: they were the two files big enough to use all 4096
+                # codes, while the largest that came close, at 3954, was fine.
+                #
+                # The phrase just consumed is deliberately not re-registered.
+                # The decoder resets to 258 literals on Clear and only creates
+                # its first new entry when it reads the *following* code, so
+                # registering here would leave the encoder one entry ahead and
+                # desynchronise the numbering. The normal path re-adds it on the
+                # next miss, which keeps both sides in step.
+                emit(_CLEAR_CODE, bits)
+                table = {}
+                next_code = _FIRST_CODE
+                bits = _MIN_BITS
+                max_code = (1 << _MIN_BITS) - 1
             prefix = byte
         emit(prefix, bits)
 
@@ -515,7 +538,44 @@ def read_tiff(raw: bytes) -> TiffImage:
     data = data[:expected]
 
     extra = _first_ints(entries, TAG_EXTRA_SAMPLES, [EXTRA_SAMPLES_UNSPECIFIED])
-    associated = bool(extra) and extra[0] == EXTRA_SAMPLES_ASSOCIATED
+    declared = extra[0] if extra else EXTRA_SAMPLES_UNSPECIFIED
+
+    # Decide the alpha convention from the DATA, not from the tag.
+    #
+    # 23 of the 97 shipped icons declare ExtraSamples=1 (associated /
+    # premultiplied) but contain straight-alpha samples, and that is decidable
+    # rather than a matter of opinion: in genuine premultiplied data a channel
+    # can never exceed alpha, so a single pixel with max(RGB) > alpha proves
+    # the tag is lying. In Bypass.tiff, 98 of 102 partial-alpha pixels violate
+    # it. The 68 genuinely premultiplied icons violate it zero times, so the two
+    # populations are cleanly separated and no threshold is needed beyond "any".
+    #
+    # Trusting the tag here is what turned those 23 icons' soft edges into solid
+    # white: un-premultiplying (102,102,102,a=91) gives (255,255,255,91) after
+    # clamping, and the whole antialiasing ramp is destroyed. A tag is metadata
+    # about intent; the samples are the image.
+    raw = data
+    partial = 0
+    violating = 0
+    for index in range(width * height):
+        source = index * samples
+        if samples != 4:
+            break
+        alpha = raw[source + 3]
+        if alpha == 0 or alpha == 255:
+            continue
+        partial += 1
+        if (raw[source] > alpha or raw[source + 1] > alpha
+                or raw[source + 2] > alpha):
+            violating += 1
+    associated = declared == EXTRA_SAMPLES_ASSOCIATED
+    if violating:
+        associated = False
+    elif not associated and partial:
+        # No violations, so the samples are at least *consistent* with
+        # premultiplied. Honour that even where the tag is silent or says
+        # otherwise, since the data is the more reliable witness.
+        associated = _looks_premultiplied(raw, width, height, samples)
 
     pixels = bytearray(expected if samples == 4 else expected + width * height)
     for index in range(width * height):
@@ -540,7 +600,97 @@ def read_tiff(raw: bytes) -> TiffImage:
     return TiffImage(width, height, bytes(pixels))
 
 
-def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW) -> bytes:
+def _survived_roundtrip(after: bytes, before: bytes, tolerance: int = 1) -> bool:
+    """Whether the file we wrote really holds the image we meant to write.
+
+    The comparison is made in *premultiplied* space, and it has to be. Straight
+    space is the wrong invariant here for a reason worth stating, because
+    getting it wrong looks like a codec bug:
+
+        (100,100,100,a=2) -> premultiply -> (1,1,1,2) -> un-premultiply
+                           -> (128,128,128,2)
+
+    A 28-point error, from a file that is perfectly correct. Premultiplied
+    8-bit storage simply cannot carry the colour of a nearly-transparent pixel,
+    so un-premultiplying one divides by a tiny number and the result is
+    numerically meaningless. Judged in premultiplied space the same round trip
+    is exact - (1,1,1,2) is precisely the right premultiplied form of
+    (100,100,100,2) - and since that is the space TouchDesigner composites in,
+    it is also the space where fidelity is what actually matters.
+
+    So: re-premultiply what we read back and compare against what we intended
+    to store, allowing one unit for the two independent roundings. Anything
+    beyond that is a genuine failure - a wrong strip length, a desynchronised
+    LZW stream, a bad dimension - and catching it at generation time, where
+    the fix is still cheap, is the entire point.
+    """
+    if len(after) != len(before):
+        return False
+    want = _premultiply(before)
+    got = _premultiply(after)
+    for i in range(len(want)):
+        if abs(want[i] - got[i]) > tolerance:
+            return False
+    return True
+
+
+def _premultiply(pixels: bytes) -> bytes:
+    """Straight RGBA -> premultiplied RGBA.
+
+    Every pixel is scaled, including a fully transparent one, and that is the
+    whole point of the function rather than an incidental detail. A
+    premultiplied compositor evaluates `src + dst*(1-a)`, so a pixel stored as
+    (200,100,50,a=0) does not vanish - with a=0 the destination term vanishes
+    instead, and the pixel renders as a solid orange block. Leaving the colour
+    of a transparent pixel alone is not a harmless shortcut, it inverts the
+    pixel from invisible to fully opaque.
+
+    Four of the 97 shipped icons carry colour under a=0 (they are among the 23
+    that declare premultiplied and are not), so this is reachable from real
+    data rather than hypothetical: 50 pixels across a generated set.
+    """
+    out = bytearray(len(pixels))
+    for i in range(0, len(pixels), 4):
+        a = pixels[i + 3]
+        if a == 255:
+            out[i:i + 4] = pixels[i:i + 4]
+            continue
+        for k in range(3):
+            out[i + k] = (pixels[i + k] * a + 127) // 255
+        out[i + 3] = a
+    return bytes(out)
+
+
+def _looks_premultiplied(data: bytes, width: int, height: int, samples: int) -> bool:
+    """True if `data` holds premultiplied samples, judged by its own content.
+
+    A premultiplied image has a flat, characteristic profile: bright interiors
+    sitting at or just under alpha=255, with dimmer fringes. A straight image
+    of the same artwork keeps full-strength colour in its antialiased pixels,
+    so a large majority of its partial-alpha pixels have a channel above alpha.
+    Counting that majority separates the two populations with a wide margin
+    (the 68 real cases sit at 0%, the 23 mislabeled ones at 96%+), which makes
+    the threshold unimportant - it only has to not be near either population.
+    """
+    if samples != 4:
+        return False
+    partial = above = 0
+    for index in range(width * height):
+        source = index * samples
+        alpha = data[source + 3]
+        if alpha == 0 or alpha == 255:
+            continue
+        partial += 1
+        if (data[source] > alpha or data[source + 1] > alpha
+                or data[source + 2] > alpha):
+            above += 1
+    if not partial:
+        return False
+    return above * 100 < partial * 20
+
+
+def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW,
+               premultiplied: bool = True) -> bytes:
     """Encode a `TiffImage` as a classic little-endian TIFF.
 
     The tag set is deliberately minimal - width, height, bit depth, compression,
@@ -549,23 +699,41 @@ def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW) -> bytes
     friends) that contribute nothing to rendering; dropping them makes a
     regenerated icon both smaller and easier to reason about.
 
-    The one tag that is not optional is ExtraSamples. 95 of the 97 shipped icons
-    store *premultiplied* alpha; `read_tiff` divides that back out so the
-    transforms here work in straight alpha, which means the output is straight.
-    TIFF 6.0 leaves the alpha convention undefined when SamplesPerPixel is 4
-    and ExtraSamples is absent, and in practice decoders assume associated -
-    libtiff, Photoshop and most image viewers included. Writing 4 samples with
-    no ExtraSamples tag would therefore have every reader multiply alpha in a
-    second time: the icon still decodes, so nothing errors, it just renders too
-    dark and its thinnest anti-aliased strokes disappear. Emitting
-    EXTRA_SAMPLES_UNASSOCIATED says "straight" explicitly and closes that off.
+    `image.pixels` is always straight (unassociated) RGBA, whatever the
+    `premultiplied` flag says; the conversion happens here, on the way out.
+
+    `premultiplied=True` is the default because that is the convention
+    TouchDesigner actually composites in, and matching it is the only thing
+    that matters. 95 of the 97 shipped icons are premultiplied, and
+    libPOP.dylib - the panel and icon-drawing library - carries explicit
+    `premult`, `premultcolor` and `premultrgbbyalpha` handling, so the
+    renderer is built around premultiplied samples.
+
+    Writing straight alpha into that renderer is not a cosmetic mismatch, it
+    is a visible bug, and it is silent: the file decodes, `sips` agrees with
+    it, and the image still looks like an icon. But a premultiplied
+    compositor computes `src + bg*(1-a)`, so a pixel with alpha 13/255 whose
+    colour is the full tint (140,172,255) lands at luma 171 instead of the
+    8.8 it should be. Every antialiased edge pixel is drawn at full strength,
+    which closes the gaps between strokes and turns smooth 16x16 glyphs into
+    hard, blocky silhouettes - small detail fills in and the icons read as
+    pixelated. Measured on a 24x24 glyph, the whole icon came out 2.83x too
+    heavy.
+
+    An earlier version of this module reasoned the opposite way: that because
+    TIFF leaves the convention undefined and generic decoders assume
+    associated, the safe choice was to declare ExtraSamples=2 explicitly. That
+    is true about libtiff, Photoshop and image viewers, and irrelevant here.
+    The one decoder that matters is TouchDesigner's, and it wants the same
+    convention as the files it already ships. Being unambiguous for third
+    parties is worth nothing if the renderer draws the result wrong.
     """
     if compression not in (COMPRESSION_NONE, COMPRESSION_LZW):
         raise IconError(f"unsupported output compression {compression}")
     if not image.pixels or len(image.pixels) != image.width * image.height * 4:
         raise IconError("image pixels are not width*height*4 bytes of RGBA")
 
-    data = image.pixels
+    data = _premultiply(image.pixels) if premultiplied else image.pixels
     if compression == COMPRESSION_LZW:
         data = lzw_encode(data)
 
@@ -599,9 +767,10 @@ def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW) -> bytes
         (TAG_STRIP_OFFSETS, 4, 1, struct.pack("<I", strip_offset)),
         (TAG_SAMPLES_PER_PIXEL, 3, 1, struct.pack("<HH", 4, 0)),
         (TAG_ROWS_PER_STRIP, 3, 1, struct.pack("<HH", image.height, 0)),
-        (TAG_STRIP_BYTE_COUNTS, 4, 1, struct.pack("<I", len(image.pixels if compression == COMPRESSION_NONE else data))),
+        (TAG_STRIP_BYTE_COUNTS, 4, 1, struct.pack("<I", len(data))),
         (TAG_PLANAR_CONFIG, 3, 1, struct.pack("<HH", 1, 0)),
-        (TAG_EXTRA_SAMPLES, 3, 1, struct.pack("<HH", EXTRA_SAMPLES_UNASSOCIATED, 0)),
+        (TAG_EXTRA_SAMPLES, 3, 1, struct.pack(
+            "<HH", EXTRA_SAMPLES_ASSOCIATED if premultiplied else EXTRA_SAMPLES_UNASSOCIATED, 0)),
         (282, 5, 1, struct.pack("<I", x_res_offset)),   # XResolution
         (283, 5, 1, struct.pack("<I", y_res_offset)),   # YResolution
     ]
@@ -1138,6 +1307,27 @@ def load_recipe(path) -> dict:
     return recipe
 
 
+#: Ops that decide a pixel's colour from its luminance, and so cannot be
+#: composed - applying one twice is not "twice as much", it is a second
+#: recolour of an already-recoloured image. Everything else is an adjustment
+#: and accumulates normally.
+_RECOLOUR_OPS = frozenset({"tint", "solid", "hue_rotate"})
+
+
+def _select_ops(matching: list) -> "tuple[dict | None, list]":
+    """Decide which of one icon's matching ops actually run.
+
+    Returns `(winner, adjust)` where `winner` is the single recolouring op to
+    apply - the last one, or None if the icon had none - and `adjust` is every
+    adjusting op in recipe order. See apply_recipe for why the two halves are
+    treated differently; keeping the decision here rather than in the caller
+    means the policy lives in one place.
+    """
+    recolour = [s for s in matching if s.get("op") in _RECOLOUR_OPS]
+    adjust = [s for s in matching if s.get("op") not in _RECOLOUR_OPS]
+    return (recolour[-1] if recolour else None), adjust
+
+
 def apply_recipe(baseline_dir, destination, recipe: dict, *,
                  compression: int = COMPRESSION_LZW,
                  progress=None) -> "dict[str, object]":
@@ -1202,19 +1392,41 @@ def apply_recipe(baseline_dir, destination, recipe: dict, *,
         except IconError as exc:
             raise IconError(f"baseline icon {name} cannot be decoded: {exc}") from exc
 
+        original_image = image
         original_pixels = image.pixels
-        applied = False
-        for spec in ops:
-            if _match(stem, spec.get("match", "*")):
-                image = _run_op(image, spec)
-                applied = True
+        matching = [spec for spec in ops if _match(stem, spec.get("match", "*"))]
+
+        # Recolouring ops replace; adjusting ops accumulate. This distinction is
+        # the whole reason a recipe can say "a later op wins" and mean it.
+        #
+        # `tint` maps a pixel to `colour * luma(pixel)`, so it is not
+        # composable: running it twice reads the first result's luminance as
+        # though it were the original shading, and multiplies by the target's
+        # relative luminance a second time. A pixel that should land on
+        # (255,92,84) for the error group instead landed on (171,62,56) - 33%
+        # too dark - because the general periwinkle tint had already been
+        # applied and then tinted again. That hit 19 of the 97 icons in
+        # `midnight` and 27 in `sunset`, and silently, since every file was a
+        # valid TIFF and `sips` agreed with all of it.
+        #
+        # So: take the last matching recolour op, run it on the *original*
+        # image so it sees the artwork's true luminance, then apply the
+        # adjusting ops in order on top. `bnw` depends on the accumulate half -
+        # its contrast passes go 1.5 then 1.7 and are meant to compound - and
+        # `midnight` depends on the replace half, where the semantic groups
+        # exist precisely to overwrite the general tint.
+        winner, adjust = _select_ops(matching)
+
+        image = _run_op(original_image, winner) if winner else image
+        for spec in adjust:
+            image = _run_op(image, spec)
+        applied = bool(matching)
 
         raw = write_tiff(image, compression=compression)
         # A generated file that will not decode is worse than no file: it
         # would be written into the app bundle and silently blank the icon.
         # Verify here, once, at generation time, where the fix is cheap.
-        verify = read_tiff(raw)
-        if verify.pixels != image.pixels:
+        if not _survived_roundtrip(read_tiff(raw).pixels, image.pixels):
             raise IconError(f"internal error: {name} did not survive the TIFF "
                             f"round-trip and was not written")
 
