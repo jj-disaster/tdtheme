@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "_comment": [
+    "midnight - cool periwinkle icons to match the deep blue network editor.",
+    "",
+    "The mechanism is `tint`, which keeps each pixel's own luminance and takes",
+    "only its hue from the theme. That matters for icons specifically: the",
+    "anti-aliasing and the inner shading of a glyph are luminance structure,",
+    "so a tint keeps them and a `solid` op would flatten them away.",
+    "",
+    "What a tint can reach, because it is a fact about the shipped set rather",
+    "than about this theme: of the 97 icons, 69 are pure white with alpha and",
+    "25 are genuinely coloured, and both of those have luminance to preserve, so",
+    "the general op moves 94 of them. The remaining 3 - Cook, Grid and",
+    "CommentOffSmall - are pure black with alpha. There is no hue in a black",
+    "pixel to replace, so `tint` leaves them alone, and that is the right",
+    "outcome rather than a gap: they are dark ink drawn on a light tile, and",
+    "recolouring them would break the field they are meant to sit on.",
+    "",
+    "The result is also brighter than the shipped icons on purpose. On this",
+    "theme's near-black worksheet, stock icons sit at roughly the same value as",
+    "the background and read as smudges.",
+    "",
+    "Ops apply in order, and a later op wins, so the semantic groups below are",
+    "painted back over the general tint. Errors stay red and warnings stay",
+    "amber because a red error badge is a warning *to the operator*; recolouring",
+    "it to match the theme would remove the signal along with the hue."
+  ],
+  "ops": [
+    { "match": "*", "op": "tint", "color": [140, 172, 255] },
+
+    { "match": "Error*", "op": "tint", "color": [255, 92, 84] },
+    { "match": "ShowDockOffError", "op": "tint", "color": [255, 92, 84] },
+    { "match": "ShowDockOffScriptError", "op": "tint", "color": [255, 132, 76] },
+    { "match": "ErrorNetworkScript", "op": "tint", "color": [255, 132, 76] },
+
+    { "match": "Warn*", "op": "tint", "color": [255, 196, 74] },
+
+    { "match": "Cook*", "op": "tint", "color": [122, 226, 168] },
+    { "match": "NoCook*", "op": "tint", "color": [122, 226, 168], "strength": 0.55 },
+
+    { "match": "SoftLock*", "op": "tint", "color": [196, 176, 255] },
+    { "match": "Locked*", "op": "tint", "color": [196, 176, 255] },
+    { "match": "Unlocked", "op": "tint", "color": [196, 176, 255] },
+
+    { "match": "*Overlay", "op": "brightness", "factor": 1.12 }
+  ]
+}

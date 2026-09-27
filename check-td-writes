@@ -1,6 +1,6 @@
 #!/bin/sh
-# Settle an open question: does TouchDesigner ever WRITE TouchColors or
-# TouchOptions, or only read them at startup?
+# Settle an open question: does TouchDesigner ever WRITE TouchColors,
+# TouchOptions or the Icons directory, or only read them?
 #
 # Earlier versions of this project asserted it rewrites TouchOptions on exit.
 # That came from misreading the user's own edits as TouchDesigner's, and was
@@ -10,17 +10,35 @@
 #   ./check-td-writes record    # run BEFORE launching TouchDesigner
 #   ./check-td-writes check     # run AFTER quitting TouchDesigner
 #
-# If the checksums match, TouchDesigner did not write either file, and
-# applying a theme while it runs is safe. If they differ, it does write, and
-# the tool needs a "re-apply on quit" mechanism.
+# If the checksums match, TouchDesigner did not write any of them, and applying
+# a theme while it runs is safe. If they differ, it does write, and the tool
+# needs a "re-apply on quit" mechanism.
+#
+# The Icons directory is summed rather than listed: 97 files is too many rows to
+# read, and the only question is whether the set changed at all. TouchDesigner
+# caches icons on first use and never writes them back, so it is expected to be
+# the quiet one.
 
 set -e
 CFG=/Applications/TouchDesigner.app/Contents/Resources/tfs/Config
 SNAP="$(dirname "$0")/.tdwrite-snapshot"
 
+# $1 = output file. One line per tracked artefact: <label> <md5>
+snapshot() {
+  {
+    md5 -q "$CFG/TouchColors"  | sed 's/$/ TouchColors/'
+    md5 -q "$CFG/TouchOptions" | sed 's/$/ TouchOptions/'
+    if [ -d "$CFG/Icons" ]; then
+      printf '%s Icons\n' "$(cat "$CFG"/Icons/*.tiff 2>/dev/null | md5 -q)"
+    else
+      echo "(missing) Icons"
+    fi
+  } > "$1"
+}
+
 case "$1" in
   record)
-    md5 -q "$CFG/TouchColors" "$CFG/TouchOptions" > "$SNAP"
+    snapshot "$SNAP"
     echo "recorded $(date '+%H:%M:%S'):"
     sed 's/^/  /' "$SNAP"
     echo
@@ -38,21 +56,29 @@ case "$1" in
       exit 1
     fi
     after="$(mktemp)"
-    md5 -q "$CFG/TouchColors" "$CFG/TouchOptions" > "$after"
+    snapshot "$after"
 
-    echo "file            before   after"
-    paste "$SNAP" "$after" | awk 'NR<=2 {
-      printf "  Touch%-12s %s  %s  %s\n", NR, $1, $2, ($1==$2 ? "same" : "CHANGED")
-    }'
+    echo
+    awk 'NR==FNR { b[$2]=$1; order[NR]=$2; next }
+         { a[$2]=$1 }
+         END {
+           printf "artefact        before                                 after                                  verdict\n"
+           n = 0
+           for (i = 1; i <= length(order); i++) {
+             k = order[i]
+             n++
+             printf "  %-12s %-36s %-36s %s\n", k, b[k], a[k], (b[k]==a[k] ? "same" : "CHANGED")
+           }
+         }' "$SNAP" "$after"
 
     if cmp -s "$SNAP" "$after"; then
       echo
-      echo "RESULT: unchanged. TouchDesigner did not write either file."
+      echo "RESULT: unchanged. TouchDesigner wrote none of them."
       echo "        Applying a theme while it runs is safe; a restart is only"
       echo "        needed for the change to become visible."
     else
       echo
-      echo "RESULT: CHANGED. TouchDesigner does write these files."
+      echo "RESULT: CHANGED. TouchDesigner does write at least one of these."
       echo "        The tool needs to re-apply after quit, or refuse to run"
       echo "        while TouchDesigner is open."
     fi

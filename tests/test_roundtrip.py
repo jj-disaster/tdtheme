@@ -47,17 +47,28 @@ def roundtrip(raw: bytes, name: str) -> None:
 print("TouchDesigner stores")
 print("-" * 60)
 
-# Fall back to the project baseline if TouchDesigner is not installed.
-for store in (TOUCHCOLORS, TOUCHOPTIONS):
-    path = TD_CONFIG / store
-    if path.exists():
-        roundtrip(path.read_bytes(), f"installed {store}")
-    else:
-        local = Path(__file__).resolve().parent.parent / "baseline" / store
-        if local.exists():
-            roundtrip(local.read_bytes(), f"baseline {store}")
-        else:
-            check(False, f"{store}: no file to test against")
+# Round-trip both the installed files and the pristine baseline when available.
+# The installed copy is the one that actually has to survive a real apply; the
+# baseline is the reference every theme diffs against. Testing both means a
+# corrupt install is caught without making the result depend on which theme
+# happens to be applied right now.
+PROJECT = Path(__file__).resolve().parent.parent
+BASELINE = PROJECT / "baseline"
+
+sources = []
+for label, directory in (("installed", TD_CONFIG), ("baseline", BASELINE)):
+    for store in (TOUCHCOLORS, TOUCHOPTIONS):
+        path = directory / store
+        if path.exists():
+            sources.append((f"{label} {store}", path))
+        elif label == "installed":
+            print(f"  skip  {label} {store} (not present)")
+
+if not sources:
+    check(False, "no TouchColors/TouchOptions to test against")
+
+for label, path in sources:
+    roundtrip(path.read_bytes(), label)
 
 print()
 print("Parser edge cases")
@@ -90,30 +101,37 @@ check(nt.trailing_newline is False, "edge: missing trailing newline detected")
 check(nt.to_bytes() == b"a.b\t1\t0\t0", "edge: no trailing newline is not added")
 
 # The two real oddities must survive, not just round-trip.
-colors_path = TD_CONFIG / TOUCHCOLORS
+#
+# Stated against the *baseline*, not the live install. These are claims about
+# what the vendor ships, and a theme is allowed to change any of them - reading
+# the install here would make applying midnight fail the gate for changing
+# nothing this test cares about.
+colors_path = BASELINE / TOUCHCOLORS
+check(colors_path.exists(), "baseline TouchColors present")
 if colors_path.exists():
     real = TdFile.parse(colors_path.read_bytes(), TOUCHCOLORS)
     hint = real.get("dialog.commenthint")
     check(hint is not None and len(hint) == 4 and hint[0] == "",
-          "real: dialog.commenthint keeps its empty second field")
+          "shipped: dialog.commenthint keeps its empty second field")
     check(real.get("dialog.commenthint.comp") is not None,
-          "real: dialog.commenthint.comp present")
+          "shipped: dialog.commenthint.comp present")
     pop = real.rgb("POP.hilite")
     check(pop is not None and max(pop) > 1.0,
-          f"real: POP.hilite >1.0 preserved unclamped (got {pop})")
+          f"shipped: POP.hilite >1.0 preserved unclamped (got {pop})")
     check(real.get("font.default.face") is None and
           real.get("tile.border.size") is None,
-          "real: option keys absent from the colour store")
+          "shipped: option keys absent from the colour store")
 
-options_path = TD_CONFIG / TOUCHOPTIONS
+options_path = BASELINE / TOUCHOPTIONS
+check(options_path.exists(), "baseline TouchOptions present")
 if options_path.exists():
     opts = TdFile.parse(options_path.read_bytes(), TOUCHOPTIONS)
     check(opts.get("font.default.face") == [""],
-          "real: empty option value round-trips as ['']")
+          "shipped: empty option value round-trips as ['']")
     check(opts.get("font.mono.face") == [""],
-          "real: font.mono.face empty value preserved")
+          "shipped: font.mono.face empty value preserved")
     check(opts.get("tile.inout.origsize") == ["10"],
-          f"real: tile.inout.origsize is 10 (got {opts.get('tile.inout.origsize')})")
+          f"shipped: tile.inout.origsize is 10 (got {opts.get('tile.inout.origsize')})")
 
 print()
 print(f"PyYAML available: {_have_yaml()}  "

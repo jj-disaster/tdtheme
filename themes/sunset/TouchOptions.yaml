@@ -1,0 +1,4 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchOptions
+
+tile.inout.origsize: ["11"]

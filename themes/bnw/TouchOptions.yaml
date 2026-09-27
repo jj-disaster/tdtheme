@@ -1,0 +1,41 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchOptions
+#
+# "bnw" changes no options. That is a decision, not an omission.
+#
+# The obvious candidate is the node-shade multipliers. TouchOptions derives
+# every node's highlight / low / icon shade from its base colour with
+# NODE.icon.val 0.27, OP.hi.val 1.7, OP.lo.val 0.5, OP.lo2.val 0.3 and a
+# matching .sat for each (docs/parameter-reference.md 5.4). With the seven
+# base colours in TouchColors.yaml now gray, those multipliers change gray to
+# gray: a saturation multiplier cannot introduce saturation that is not
+# there. So there is nothing to fix.
+#
+# The value multipliers do still apply, and they are worth knowing about when
+# reading back the node colours in TouchColors.yaml. OP.hi.val 1.7 means a
+# node's highlight tone is 1.7x its base, so the lightest base in this theme
+# (COMP at 1.00) has a derived highlight of 1.70 - above 1.0, which is legal,
+# since these files are not clamped (README, "Validation") - while the darkest
+# (POP at 0.15) has one at 0.26. That is the reason the node bases are pinned
+# to 1.00 at the top rather than left to run: anything above 1.0 is legal but
+# indistinguishable from anything else above 1.0, so the highlight shades for
+# COMP, MAT and SOP are set explicitly in TouchColors.yaml instead of being
+# left to the multiplier.
+#
+# Leaving out the second family of candidates is deliberate too. The
+# blendtype keys (worksheet.grid.blendtype, icon.blendtype,
+# tile.icon.bg.blendtype) take an enum that is still undecoded, and the
+# alpha keys are the documented way to switch a decoration off
+# (worksheet.grid.alpha 0 hides the network grid). Neither is a colour, and
+# a black-and-white theme has no reason to touch either. Anything that
+# silently changes how a tile composites is a bad trade for a theme whose
+# entire claim is that it changed nothing but hue and grey.
+#
+#   tdtheme apply bnw
+#
+# See TouchColors.yaml in this folder for the theme itself, the four keys
+# deliberately left coloured, and the six groups that need more than two
+# values. The sibling theme `mono` reaches the same no-hue result by keeping
+# each key's shipped luminance instead, so it also changes no options - but it
+# needs 80 tones rather than 16, and that is the whole difference between the
+# two.

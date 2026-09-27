@@ -1,0 +1,618 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchColors
+#
+# "mono" - black and white. Not a dark theme, not a light theme: the same
+# interface with the colour taken out. Every light/dark relationship, every
+# contrast ratio and every deliberate state distinction survives, because each
+# key keeps its own shipped brightness. What is gone is hue.
+#
+#   tdtheme apply mono         # switch to it
+#   tdtheme apply default      # back to the stock look
+#
+# ---------------------------------------------------------------- method
+#
+# The default for every key is the Rec.709 luminance of its shipped RGB,
+# rounded to two decimals:
+#
+#     L = 0.2126 R + 0.7152 G + 0.0722 B        worksheet.bg -> 0.11
+#
+# That single rule does most of the work, and it is why this theme is safe:
+# luminance preserves ordering, so nothing that was brighter than something
+# else stops being brighter. The result is 80 distinct tones across 626 keys -
+# a scale, not a palette. It is deliberately not a palette; see below.
+#
+# The obvious alternative - snap everything to a fixed 10-step palette - was
+# measured and rejected. The shipped file separates 82 state siblings by
+# design (`parms.button.bg` 0.36 vs `.bg.loc` 0.42, plus `.sel`, `.off`,
+# `.on`, `.disabled`, `.editing`, `.editable`), and 35 of those pairs differ
+# by less than 0.06. A 10-step ramp collapses 33 of the 82 into a single
+# tone; 12 steps still eats 31, and 24 steps still eats 20 - while looking
+# like a palette rather than like the interface it is restyling. A quantizer
+# that discards a third of the shipped state information is not a design, it
+# is damage. So the ramp below is applied only where hue was genuinely
+# carrying information, and nowhere else.
+#
+# ---------------------------------------------------------------- the ramp
+#
+# Node type base hues. Seven keys, evenly spaced 0.08 apart. Shipped
+# luminance leaves them at 0.19 / 0.34 / 0.39 / 0.42 / 0.47 / 0.50 / 0.57 -
+# six of the seven crowded into 0.34-0.57, which is not a palette, it is a
+# smear. These are also the only seven node colours TouchDesigner stores;
+# the highlight, low and icon shades of every node are derived from them by
+# the sat/val multipliers in TouchOptions (see docs/parameter-reference.md
+# 5.4), so all seven have to move together or the derived shades desync.
+# They do here. The base colours are gray, so the .sat multipliers are a
+# no-op and cannot reintroduce colour.
+#
+#   POP 0.18  DAT 0.26  MAT 0.34  CHOP 0.42  SOP 0.50  TOP 0.58  COMP 0.66
+#
+# Syntax highlighting. The shipped sets disagree with each other - python
+# makes `strings` salmon and glsl makes it yellow, xml makes `attributes`
+# blue and python has no such token. In grayscale those disagreements become
+# arbitrary brightness differences. One ramp, applied by token role, across
+# all five languages:
+#
+#   comments 0.45 < symbols 0.52 < attributevalues 0.58 < numbers/strings 0.68
+#              < keywords/tags 0.80 < functions/attributes 0.92
+#
+# Editable / editing / noteditable also disagreed (dat.python makes `editing`
+# dimmer than `editable`; textport makes it brighter). One order for the whole
+# app: actively focused is brightest.
+#
+#   noteditable 0.48 < editable 0.68 < editing 0.85
+#
+# 3D axes. X / Y / Z were the only thing distinguishing them. Three tones,
+# as far apart as three tones can be: X 0.92, Y 0.58, Z 0.26.
+#
+# CHOP graph bars. bar.0-2 ship as a gray ramp and are left untouched. bar.3-7
+# are five identity colours - yellow, cyan, blue, pink, white - and luminance
+# crushes them into 0.71-0.90, which is to say nearly the same grey five times.
+# Spaced on the same 0.08 rhythm as the node types, continuing upward from
+# bar.2:
+#
+#   bar.3 0.64  bar.4 0.72  bar.5 0.80  bar.6 0.88  bar.7 0.96
+#
+# CHOP aux curves. Shipped luminance puts aux2 (0.71) on top of aux3 (0.64).
+# Four curves plus four marker tones, evenly spaced:
+#
+#   aux1 0.30  aux2 0.48  aux3 0.66  aux4 0.84
+#   mark 0.38  mark 0.56  mark 0.74  mark 0.92
+#
+# ---------------------------------------------------------------- state
+#
+# Error is the one place the luminance rule had to be overridden rather than
+# followed. Pure red has a luminance of 0.213, so mechanically it becomes a
+# dark grey mark on a black tile - the exact opposite of what red was doing.
+# Errors here are the brightest thing in the theme (0.95) on the assumption
+# that the reason red was red was to be noticed, and brightness is the only
+# channel left to notice it with. Warning sits below at 0.78 so the two never
+# compete. Cook/live state is 0.72.
+#
+# What is genuinely lost, and no value fixes it: error, selection and
+# "this row is special" are all brightness in a grayscale theme. tile.error
+# and a selected tile are now told apart by tone alone, so treat the brightest
+# mark in the network editor as "check this" rather than assuming it is an
+# error.
+#
+# ---------------------------------------------------------------- exceptions
+#
+# Four keys stay coloured on purpose:
+#
+#   ramp.red  ramp.green  ramp.blue  ramp.saturation
+#
+# These are the identity of a hue channel in the Ramp node's colour picker,
+# not decoration. A grey "red ramp" cannot be told from a grey "green ramp",
+# so desaturating them breaks the control rather than restyling it. This is
+# the one place in the theme where hue is information, and the reason a
+# black-and-white TouchDesigner is 622 of 626 keys, not 626.
+#
+# ---------------------------------------------------------------- caveats
+#
+# This theme is deliberately close to total: 460 of 626 keys, against 20 for
+# midnight and 17 for sunset. A full desaturation has no small version, and
+# pretending otherwise would leave the interface half coloured.
+#
+# The cost is the usual sparse-overlay trade-off, in reverse. A sparse theme
+# inherits keys a future TouchDesigner adds; this one cannot, because it
+# cannot desaturate a key it has never heard of. After a TouchDesigner update
+# that adds colour keys, expect new keys to arrive coloured and the theme to
+# need regenerating against the new baseline (`tdtheme capture --force`).
+#
+# No TouchOptions changes. The sat/val multipliers need no adjustment because
+# a gray base stays gray under any saturation multiplier, and the blendtype
+# enum is still undecoded (docs/parameter-reference.md 5.2) - not worth
+# guessing at for a theme that does not need it.
+#
+# ---------------------------------------------------------------- siblings
+#
+# `bnw` is a later pass at the same brief, and the two are not
+# interchangeable. This theme desaturates without brightening: each key keeps
+# its own shipped luminance, so the vendor's light/dark ordering survives
+# intact and every state sibling stays distinct - at the cost of needing 80
+# tones, which is a scale rather than a palette. `bnw` is the opposite
+# trade: 16 tones, hierarchy carried by inversion, closer to black and white
+# in the sense that most keys are. If the interface looks too grey, use
+# `bnw`; if something in it went missing, use this one.
+#
+
+# --- node type base hues -----------------------------------------------
+CHOP: ["0.42", "0.42", "0.42"]
+COMP: ["0.66", "0.66", "0.66"]
+COMP.hilite: ["1", "1", "1"]
+DAT: ["0.26", "0.26", "0.26"]
+MAT: ["0.34", "0.34", "0.34"]
+MAT.editbg: ["0.41", "0.41", "0.41"]
+MAT.hilite: ["0.58", "0.58", "0.58"]
+OP.default: ["0.72", "0.72", "0.72"]
+POP: ["0.18", "0.18", "0.18"]
+POP.hilite: ["0.31", "0.31", "0.31"]
+SOP: ["0.50", "0.50", "0.50"]
+SOP.editbg: ["0.60", "0.60", "0.60"]
+SOP.hilite: ["0.85", "0.85", "0.85"]
+TOP: ["0.58", "0.58", "0.58"]
+
+# --- default. tier - generic chrome ------------------------------------
+default.button: ["0.75", "0.75", "0.75"]
+default.button.select: ["0.40", "0.40", "0.40"]
+default.buttonstrip: ["0.22", "0.22", "0.22"]
+default.error: ["0.95", "0.95", "0.95"]
+default.field.bg: ["0.70", "0.70", "0.70"]
+default.field.bg.loc: ["0.90", "0.90", "0.90"]
+default.field.fg: ["0.10", "0.10", "0.10"]
+default.groove.lolite: ["0.22", "0.22", "0.22"]
+default.input: ["0.70", "0.70", "0.70"]
+default.label: ["0.41", "0.41", "0.41"]
+default.line: ["0.50", "0.50", "0.50"]
+default.listentry.outline: ["0.20", "0.20", "0.20"]
+default.menubar: ["0.19", "0.19", "0.19"]
+default.menuheading.bg: ["0.30", "0.30", "0.30"]
+default.multitext.editable: ["0.62", "0.62", "0.62"]
+default.multitext.editing: ["0.78", "0.78", "0.78"]
+default.multitext.noteditable: ["0.50", "0.50", "0.50"]
+default.override: ["0.38", "0.38", "0.38"]
+default.paper: ["0.90", "0.90", "0.90"]
+default.radio: ["0.40", "0.40", "0.40"]
+default.rightcheck: ["0.50", "0.50", "0.50"]
+default.scrollbars.bg: ["0.30", "0.30", "0.30"]
+default.separator: ["0.60", "0.60", "0.60"]
+default.slider.outline: ["0.20", "0.20", "0.20"]
+default.slider.thumb.outline: ["0.50", "0.50", "0.50"]
+default.stow.bg: ["0.30", "0.30", "0.30"]
+default.tile.line: ["0.20", "0.20", "0.20"]
+
+# --- syntax highlighting -----------------------------------------------
+dat.bg.editable: ["0.10", "0.10", "0.10"]
+dat.bg.noteditable: ["0.17", "0.17", "0.17"]
+dat.glsl.comments: ["0.45", "0.45", "0.45"]
+dat.glsl.functions: ["0.92", "0.92", "0.92"]
+dat.glsl.keywords: ["0.80", "0.80", "0.80"]
+dat.glsl.numbers: ["0.68", "0.68", "0.68"]
+dat.glsl.preprocessors: ["0.52", "0.52", "0.52"]
+dat.glsl.strings: ["0.68", "0.68", "0.68"]
+dat.indicators: ["0.30", "0.30", "0.30"]
+dat.json.booleans: ["0.80", "0.80", "0.80"]
+dat.json.comments: ["0.45", "0.45", "0.45"]
+dat.json.numbers: ["0.68", "0.68", "0.68"]
+dat.json.strings: ["0.68", "0.68", "0.68"]
+dat.json.symbols: ["0.52", "0.52", "0.52"]
+dat.lineno.bg: ["0.15", "0.15", "0.15"]
+dat.lineno.fg: ["0.70", "0.70", "0.70"]
+dat.lineno.fg.nodata: ["0.30", "0.30", "0.30"]
+dat.python.comments: ["0.45", "0.45", "0.45"]
+dat.python.editable: ["0.68", "0.68", "0.68"]
+dat.python.editing: ["0.85", "0.85", "0.85"]
+dat.python.functions: ["0.92", "0.92", "0.92"]
+dat.python.hilite: ["0.30", "0.30", "0.30"]
+dat.python.keywords: ["0.80", "0.80", "0.80"]
+dat.python.noteditable: ["0.48", "0.48", "0.48"]
+dat.python.numbers: ["0.68", "0.68", "0.68"]
+dat.python.strings: ["0.68", "0.68", "0.68"]
+dat.table.select.background: ["0.26", "0.26", "0.26"]
+dat.tscript.editable: ["0.68", "0.68", "0.68"]
+dat.tscript.editing: ["0.85", "0.85", "0.85"]
+dat.tscript.hilite: ["0.30", "0.30", "0.30"]
+dat.tscript.noteditable: ["0.48", "0.48", "0.48"]
+dat.xml.attributes: ["0.92", "0.92", "0.92"]
+dat.xml.attributevalues: ["0.58", "0.58", "0.58"]
+dat.xml.comments: ["0.45", "0.45", "0.45"]
+dat.xml.entityrefs: ["0.52", "0.52", "0.52"]
+dat.xml.symbols: ["0.52", "0.52", "0.52"]
+dat.xml.tags: ["0.80", "0.80", "0.80"]
+dat.yaml.booleans: ["0.80", "0.80", "0.80"]
+dat.yaml.comments: ["0.45", "0.45", "0.45"]
+dat.yaml.keys: ["0.80", "0.80", "0.80"]
+dat.yaml.numbers: ["0.68", "0.68", "0.68"]
+dat.yaml.strings: ["0.68", "0.68", "0.68"]
+dat.yaml.symbols: ["0.52", "0.52", "0.52"]
+
+# --- parameter dialog --------------------------------------------------
+parms.bind.bg: ["0.18", "0.18", "0.18"]
+parms.bind.bg.disabled: ["0.38", "0.38", "0.38"]
+parms.bind.bg.enabled: ["0.72", "0.72", "0.72"]
+parms.bind.fg: ["0.72", "0.72", "0.72"]
+parms.bind.hilite: ["0.32", "0.32", "0.32"]
+parms.bind.indicator: ["0.72", "0.72", "0.72"]
+parms.button.bg.disabled: ["0.30", "0.30", "0.30"]
+parms.button.border: ["0.20", "0.20", "0.20"]
+parms.button.border.disabled: ["0.20", "0.20", "0.20"]
+parms.button.expr.bg: ["0.20", "0.20", "0.20"]
+parms.button.expr.fg: ["0.80", "0.80", "0.80"]
+parms.button.fg.disabled: ["0.40", "0.40", "0.40"]
+parms.button.override.bg: ["0.40", "0.40", "0.40"]
+parms.button.override.bg.loc: ["0.52", "0.52", "0.52"]
+parms.button.override.bg.sel: ["0.40", "0.40", "0.40"]
+parms.button.override.border: ["0.20", "0.20", "0.20"]
+parms.button.override.border.inner: ["0.32", "0.32", "0.32"]
+parms.button.override.border.top: ["0.55", "0.55", "0.55"]
+parms.button.override.fg: ["0.80", "0.80", "0.80"]
+parms.comment.disabled.fg: ["0.60", "0.60", "0.60"]
+parms.const.bg: ["0.43", "0.43", "0.43"]
+parms.dialog.fg: ["0.90", "0.90", "0.90"]
+parms.disabled.err.bg: ["0.24", "0.24", "0.24"]
+parms.disabled.err.fg: ["0.72", "0.72", "0.72"]
+parms.disabled.fg: ["0.40", "0.40", "0.40"]
+parms.err.bg: ["0.28", "0.28", "0.28"]
+parms.err.fg: ["0.95", "0.95", "0.95"]
+parms.expr.bg: ["0.50", "0.50", "0.50"]
+parms.expr.bg.disabled: ["0.36", "0.36", "0.36"]
+parms.expr.bg.off: ["0.44", "0.44", "0.44"]
+parms.expr.bg.off.selected: ["0.52", "0.52", "0.52"]
+parms.expr.bg.on: ["0.56", "0.56", "0.56"]
+parms.expr.bg.on.selected: ["0.64", "0.64", "0.64"]
+parms.expr.bg.selected: ["0.58", "0.58", "0.58"]
+parms.expr.fg: ["0.80", "0.80", "0.80"]
+parms.expr.fg.off: ["0.09", "0.09", "0.09"]
+parms.expr.fg.on: ["0.09", "0.09", "0.09"]
+parms.expr.field.bg: ["0.20", "0.20", "0.20"]
+parms.expr.field.fg: ["0.80", "0.80", "0.80"]
+parms.expr.field.hilite: ["0.40", "0.40", "0.40"]
+parms.expr.hilite: ["0.40", "0.40", "0.40"]
+parms.expr.menubar.bg: ["0.50", "0.50", "0.50"]
+parms.expr.menubar.bg.loc: ["0.50", "0.50", "0.50"]
+parms.expr.menubar.bg.sel: ["0.50", "0.50", "0.50"]
+parms.expr.menubar.fg: ["0.09", "0.09", "0.09"]
+parms.expr.menubar.fg.loc: ["0.09", "0.09", "0.09"]
+parms.expr.menubar.fg.sel: ["0.09", "0.09", "0.09"]
+parms.field.numeric.bg: ["0.33", "0.33", "0.33"]
+parms.field.numeric.bg.loc: ["0.40", "0.40", "0.40"]
+parms.field.numeric.bg.selected.loc: ["0.38", "0.38", "0.38"]
+parms.field.numeric.hilite: ["0.30", "0.30", "0.30"]
+parms.field.string.bg: ["0.70", "0.70", "0.70"]
+parms.field.string.bg.selected: ["0.90", "0.90", "0.90"]
+parms.field.string.fg: ["0.10", "0.10", "0.10"]
+parms.field.string.hilite: ["0.40", "0.40", "0.40"]
+parms.label.fg.disabled: ["0.40", "0.40", "0.40"]
+parms.menubar.disabled.fg: ["0.50", "0.50", "0.50"]
+parms.menubar.fg.loc: ["0.70", "0.70", "0.70"]
+parms.menubar.fg.sel: ["0.70", "0.70", "0.70"]
+parms.menubar.outline: ["0.20", "0.20", "0.20"]
+parms.menubar.outline.loc: ["0.20", "0.20", "0.20"]
+parms.menuentry.bg.sel: ["0.50", "0.50", "0.50"]
+parms.menuentry.fg.loc: ["0.70", "0.70", "0.70"]
+parms.menuentry.fg.sel: ["0.10", "0.10", "0.10"]
+parms.menuentry.outline: ["0.20", "0.20", "0.20"]
+parms.multi.input.bg: ["0.30", "0.30", "0.30"]
+parms.multi.input.delete: ["0.95", "0.95", "0.95"]
+parms.multi.input.entry.bg: ["0.30", "0.30", "0.30"]
+parms.multi.input.title.fg: ["0.70", "0.70", "0.70"]
+parms.multi.input.up: ["0.55", "0.55", "0.55"]
+parms.override.bg: ["0.40", "0.40", "0.40"]
+parms.override.bg.disabled: ["0.28", "0.28", "0.28"]
+parms.override.bg.off: ["0.52", "0.52", "0.52"]
+parms.override.bg.off.selected: ["0.50", "0.50", "0.50"]
+parms.override.bg.on: ["0.40", "0.40", "0.40"]
+parms.override.bg.on.selected: ["0.50", "0.50", "0.50"]
+parms.override.bg.selected: ["0.45", "0.45", "0.45"]
+parms.override.fg: ["0.80", "0.80", "0.80"]
+parms.override.fg.off: ["0.09", "0.09", "0.09"]
+parms.override.fg.on: ["0.09", "0.09", "0.09"]
+parms.override.field.bg: ["0.40", "0.40", "0.40"]
+parms.override.field.bg.loc: ["0.50", "0.50", "0.50"]
+parms.override.field.bg.selected: ["0.34", "0.34", "0.34"]
+parms.override.field.bg.selected.loc: ["0.50", "0.50", "0.50"]
+parms.override.field.fg: ["0.80", "0.80", "0.80"]
+parms.override.field.hilite: ["0.32", "0.32", "0.32"]
+parms.override.hilite: ["0.32", "0.32", "0.32"]
+parms.override.menubar.bg: ["0.40", "0.40", "0.40"]
+parms.override.menubar.bg.loc: ["0.40", "0.40", "0.40"]
+parms.override.menubar.bg.sel: ["0.40", "0.40", "0.40"]
+parms.override.menubar.fg: ["0.80", "0.80", "0.80"]
+parms.override.menubar.fg.loc: ["0.80", "0.80", "0.80"]
+parms.override.menubar.fg.sel: ["0.80", "0.80", "0.80"]
+parms.readonly.fg: ["0.78", "0.78", "0.78"]
+parms.readonly.hilite: ["0.34", "0.34", "0.34"]
+parms.slider.bg: ["0.18", "0.18", "0.18"]
+parms.slider.disabled.bg: ["0.30", "0.30", "0.30"]
+parms.slider.thumb: ["0.40", "0.40", "0.40"]
+parms.slider.thumb.disabled: ["0.30", "0.30", "0.30"]
+parms.slider.thumb.disabled.outline: ["0.30", "0.30", "0.30"]
+parms.slider.thumb.loc: ["0.50", "0.50", "0.50"]
+parms.slider.thumb.off: ["0.50", "0.50", "0.50"]
+parms.slider.thumb.on: ["0.50", "0.50", "0.50"]
+parms.slider.thumb.outline: ["0.23", "0.23", "0.23"]
+parms.slider.thumb.outline.loc: ["0.23", "0.23", "0.23"]
+parms.text.hint: ["0.30", "0.30", "0.30"]
+parms.textbox.expr.bg: ["0.55", "0.55", "0.55"]
+parms.textbox.override.bg: ["0.40", "0.40", "0.40"]
+parms.text.hint.dark: ["0.40", "0.40", "0.40"]
+parms.text.hint.light: ["0.60", "0.60", "0.60"]
+parms.toggle.bg.off: ["0.33", "0.33", "0.33"]
+parms.toggle.bg.off.loc: ["0.28", "0.28", "0.28"]
+parms.toggle.disabled.bg: ["0.20", "0.20", "0.20"]
+parms.toggle.fg: ["0.50", "0.50", "0.50"]
+parms.toggle.fg.off: ["0.70", "0.70", "0.70"]
+parms.toggle.fg.on: ["0.10", "0.10", "0.10"]
+parms.toggle.outline: ["0.20", "0.20", "0.20"]
+parms.toggle.thumb.disabled: ["0.40", "0.40", "0.40"]
+parms.toggle.thumb.off: ["0.20", "0.20", "0.20"]
+parms.toggle.thumb.on: ["0.70", "0.70", "0.70"]
+
+# --- network editor - tiles and worksheet ------------------------------
+tile.active.bg: ["0.10", "0.10", "0.10"]
+tile.block: ["0.10", "0.10", "0.10"]
+tile.commented: ["0.40", "0.40", "0.40"]
+tile.connection.hilite1: ["0.93", "0.93", "0.93"]
+tile.connection.hilite2: ["0.46", "0.46", "0.46"]
+tile.connector.bg: ["0.10", "0.10", "0.10"]
+tile.current: ["0.72", "0.72", "0.72"]
+tile.default.bg: ["0", "0", "0"]
+tile.dockedconnection.line: ["0.20", "0.20", "0.20"]
+tile.drag.crosshair: ["0.40", "0.40", "0.40"]
+tile.error: ["0.95", "0.95", "0.95"]
+tile.extraconnection.line: ["0.34", "0.34", "0.34"]
+tile.extraconnection.line.hilite: ["0.50", "0.50", "0.50"]
+tile.flag.bypass: ["0.30", "0.30", "0.30"]
+tile.flag.bypass.bright: ["0.80", "0.80", "0.80"]
+tile.flag.bypass.cross: ["0.95", "0.95", "0.95"]
+tile.flag.bypass.noparentcookcross.bright: ["0.80", "0.80", "0.80"]
+tile.flag.capture: ["0.46", "0.46", "0.46"]
+tile.flag.clone: ["0.80", "0.80", "0.80"]
+tile.flag.clonechild: ["0.50", "0.50", "0.50"]
+tile.flag.compare: ["0.74", "0.74", "0.74"]
+tile.flag.display: ["0.62", "0.62", "0.62"]
+tile.flag.export: ["0.75", "0.75", "0.75"]
+tile.flag.expose: ["0.95", "0.95", "0.95"]
+tile.flag.hardlock: ["0.88", "0.88", "0.88"]
+tile.flag.link: ["0.73", "0.73", "0.73"]
+tile.flag.origin: ["0.84", "0.84", "0.84"]
+tile.flag.pickable: ["0.89", "0.89", "0.89"]
+tile.flag.render: ["0.53", "0.53", "0.53"]
+tile.flag.saveviewer: ["0.70", "0.70", "0.70"]
+tile.flag.template: ["0.87", "0.87", "0.87"]
+tile.flag.viewer: ["0.80", "0.80", "0.80"]
+tile.flagv.bypass: ["0.30", "0.30", "0.30"]
+tile.flagv.cloneimmune: ["0.90", "0.90", "0.90"]
+tile.flagv.hardlock: ["0.71", "0.71", "0.71"]
+tile.flagv.mastercloneimmune: ["0.45", "0.45", "0.45"]
+tile.ghost: ["0.30", "0.30", "0.30"]
+tile.hiddenconnection.line: ["0.38", "0.38", "0.38"]
+tile.icon.bg: ["0.20", "0.20", "0.20"]
+tile.locate: ["0.20", "0.20", "0.20"]
+tile.name.bg: ["0.20", "0.20", "0.20"]
+tile.name.hilite: ["0.70", "0.70", "0.70"]
+tile.picked: ["0.90", "0.90", "0.90"]
+tile.replicatorconnection.line: ["0.20", "0.20", "0.20"]
+tile.resizeborder: ["0.20", "0.20", "0.20"]
+tile.utility.current: ["0.70", "0.70", "0.70"]
+tile.utility.picked: ["0.70", "0.70", "0.70"]
+tile.warning: ["0.78", "0.78", "0.78"]
+worksheet.autoscroll.highlight: ["0.13", "0.13", "0.13"]
+worksheet.bg: ["0.11", "0.11", "0.11"]
+worksheet.external.flag: ["0.40", "0.40", "0.40"]
+worksheet.grid: ["0.10", "0.10", "0.10"]
+worksheet.gridxy: ["0.16", "0.16", "0.16"]
+worksheet.newnode: ["0.80", "0.80", "0.80"]
+worksheet.operatemode: ["0.70", "0.70", "0.70"]
+worksheet.pickbox: ["0.80", "0.80", "0.80"]
+worksheet.private: ["0.45", "0.45", "0.45"]
+
+# --- node / dialog lists -----------------------------------------------
+grouplist.bg: ["0.11", "0.11", "0.11"]
+grouplist.splitbar: ["0.60", "0.60", "0.60"]
+netoverview.bg: ["0.60", "0.60", "0.60"]
+nodechooser.down.hilite: ["0.54", "0.54", "0.54"]
+oplist.bg: ["0.11", "0.11", "0.11"]
+oplist.equal.fg: ["0.80", "0.80", "0.80"]
+oplist.header: ["0.05", "0.05", "0.05"]
+oplist.outline: ["0.16", "0.16", "0.16"]
+oplist.select.edithilite: ["0.21", "0.21", "0.21"]
+oplist.select.field.hilite: ["0.50", "0.50", "0.50"]
+oplist.select.hilite: ["0.16", "0.16", "0.16"]
+oplist.select.outline: ["0.26", "0.26", "0.26"]
+oplist.splitbar: ["0.60", "0.60", "0.60"]
+oplist.treebutton.bg: ["0.50", "0.50", "0.50"]
+textsheet.bg: ["0.11", "0.11", "0.11"]
+textsheet.editable: ["0.68", "0.68", "0.68"]
+textsheet.noteditable: ["0.48", "0.48", "0.48"]
+textsheet.row.hilite: ["0.90", "0.90", "0.90"]
+textsheet.select.copy: ["0.44", "0.44", "0.44"]
+textsheet.select.firstdrag: ["0.50", "0.50", "0.50"]
+textsheet.select.stippleoutline: ["0.60", "0.60", "0.60"]
+
+# --- CHOP channel editor (jive) ----------------------------------------
+jive.accel.bg: ["0.50", "0.50", "0.50"]
+jive.accel.fg: ["0.80", "0.80", "0.80"]
+jive.channel.bg: ["0.11", "0.11", "0.11"]
+jive.channel.crosshairs: ["0.55", "0.55", "0.55"]
+jive.channel.current: ["0.72", "0.72", "0.72"]
+jive.channel.display: ["0.58", "0.58", "0.58"]
+jive.channel.normal: ["0.60", "0.60", "0.60"]
+jive.channel.picked: ["0.90", "0.90", "0.90"]
+jive.channel.plot.aux1: ["0.30", "0.30", "0.30"]
+jive.channel.plot.aux1.mark: ["0.38", "0.38", "0.38"]
+jive.channel.plot.aux2: ["0.48", "0.48", "0.48"]
+jive.channel.plot.aux2.mark: ["0.56", "0.56", "0.56"]
+jive.channel.plot.aux3: ["0.66", "0.66", "0.66"]
+jive.channel.plot.aux3.mark: ["0.74", "0.74", "0.74"]
+jive.channel.plot.aux4: ["0.84", "0.84", "0.84"]
+jive.channel.plot.aux4.mark: ["0.92", "0.92", "0.92"]
+jive.channel.template: ["0.70", "0.70", "0.70"]
+jive.currenttime.bg: ["0.70", "0.70", "0.70"]
+jive.frame.timetext: ["0.42", "0.42", "0.42"]
+jive.handle.time: ["0.62", "0.62", "0.62"]
+jive.inout.bg: ["0.50", "0.50", "0.50"]
+jive.inout.fg: ["0.80", "0.80", "0.80"]
+jive.rawvalue.bg: ["0.50", "0.50", "0.50"]
+jive.rawvalue.fg: ["0.80", "0.80", "0.80"]
+jive.scalehandle.bg: ["0.50", "0.50", "0.50"]
+jive.scalehandle.fg: ["0.80", "0.80", "0.80"]
+jive.segment.bg: ["0.50", "0.50", "0.50"]
+jive.segment.fg: ["0.80", "0.80", "0.80"]
+jive.slice.bar: ["0.90", "0.90", "0.90"]
+jive.slice.box: ["0.50", "0.50", "0.50"]
+jive.slope.bg: ["0.50", "0.50", "0.50"]
+jive.slope.fg: ["0.80", "0.80", "0.80"]
+jive.timeline.bg: ["0.70", "0.70", "0.70"]
+jive.timemark.bg: ["0.70", "0.70", "0.70"]
+
+# --- 3D viewport -------------------------------------------------------
+geodetail.compare: ["0.74", "0.74", "0.74"]
+geodetail.fg: ["0.92", "0.92", "0.92"]
+geodetail.template: ["0.87", "0.87", "0.87"]
+georender.aux: ["0.54", "0.54", "0.54"]
+georender.axes: ["0.92", "0.92", "0.92"]
+georender.cplane: ["0.39", "0.39", "0.39"]
+georender.cplane.selected: ["0.72", "0.72", "0.72"]
+georender.current: ["0.72", "0.72", "0.72"]
+georender.geo.axes.selected: ["0.92", "0.92", "0.92"]
+georender.ghost: ["0.39", "0.39", "0.39"]
+georender.grid.snap: ["0.30", "0.30", "0.30"]
+georender.guide1: ["0.45", "0.45", "0.45"]
+georender.guide2: ["0.74", "0.74", "0.74"]
+georender.handle: ["0.45", "0.45", "0.45"]
+georender.handle.axis: ["0.75", "0.75", "0.75"]
+georender.handle.col1: ["0.74", "0.74", "0.74"]
+georender.handle.col2: ["0.56", "0.56", "0.56"]
+georender.handle.col3: ["0.37", "0.37", "0.37"]
+georender.handle.col4: ["0.19", "0.19", "0.19"]
+georender.handle.pivot: ["0.72", "0.72", "0.72"]
+georender.handle.rotate: ["0.88", "0.88", "0.88"]
+georender.handle.selected: ["0.72", "0.72", "0.72"]
+georender.handle.xaxis: ["0.92", "0.92", "0.92"]
+georender.handle.yaxis: ["0.58", "0.58", "0.58"]
+georender.handle.zaxis: ["0.26", "0.26", "0.26"]
+georender.heightvector: ["0.61", "0.61", "0.61"]
+georender.label: ["0.80", "0.80", "0.80"]
+georender.label.aux: ["0.80", "0.80", "0.80"]
+georender.label.bg: ["0.20", "0.20", "0.20"]
+georender.point: ["0.51", "0.51", "0.51"]
+georender.point.unused: ["0.88", "0.88", "0.88"]
+georender.point.closure: ["0.79", "0.79", "0.79"]
+georender.point.selected: ["0.95", "0.95", "0.95"]
+georender.prim.aux: ["0.46", "0.46", "0.46"]
+georender.prim.aux.selected: ["0.67", "0.67", "0.67"]
+georender.prim.closure: ["0.73", "0.73", "0.73"]
+georender.prim.edits: ["0.95", "0.95", "0.95"]
+georender.prim.info: ["0.38", "0.38", "0.38"]
+georender.prim.info.selected: ["0.82", "0.82", "0.82"]
+georender.prim.selected: ["0.95", "0.95", "0.95"]
+georender.selected: ["0.95", "0.95", "0.95"]
+georender.selected.child: ["0.50", "0.50", "0.50"]
+georender.selected.spot: ["0.95", "0.95", "0.95"]
+georender.simpledraw: ["0.95", "0.95", "0.95"]
+georender.subdivide.edge.selected: ["0.92", "0.92", "0.92"]
+georender.subdivide.edge.weighted: ["0.79", "0.79", "0.79"]
+georender.template: ["0.40", "0.40", "0.40"]
+georender.wire: ["0.80", "0.80", "0.80"]
+georender.xaxis: ["0.92", "0.92", "0.92"]
+georender.yaxis: ["0.58", "0.58", "0.58"]
+georender.zaxis: ["0.26", "0.26", "0.26"]
+
+# --- text ports and editors --------------------------------------------
+textport.editable: ["0.68", "0.68", "0.68"]
+textport.editing: ["0.85", "0.85", "0.85"]
+textport.hilite: ["0.90", "0.90", "0.90"]
+textport.noteditable: ["0.48", "0.48", "0.48"]
+textport.status.bg1: ["0.30", "0.30", "0.30"]
+textport.status.bg2: ["0.50", "0.50", "0.50"]
+textport.status.fg1: ["0.90", "0.90", "0.90"]
+
+# --- dialogs, menus, tooltips, status ----------------------------------
+dialog.bg: ["0.20", "0.20", "0.20"]
+dialog.confirm.bg: ["0.30", "0.30", "0.30"]
+dialog.error: ["0.95", "0.95", "0.95"]
+dialog.commented: ["0.40", "0.40", "0.40"]
+dialog.commented.comp: ["0.40", "0.40", "0.40"]
+dialog.commenthint: ["", "0.20", "0.20", "0.20"]
+dialog.commenthint.comp: ["", "0.50", "0.50", "0.50"]
+extendedhelp.bg: ["0.20", "0.20", "0.20"]
+panel.bg: ["0.10", "0.10", "0.10"]
+panel.edit.picked: ["0.93", "0.93", "0.93"]
+performance.actualtime: ["0.50", "0.50", "0.50"]
+performance.embeddedtime: ["0.30", "0.30", "0.30"]
+performance.text: ["0.70", "0.70", "0.70"]
+preflist.info.error: ["0.95", "0.95", "0.95"]
+preflist.info.filtered: ["0.60", "0.60", "0.60"]
+preflist.info.message: ["0.80", "0.80", "0.80"]
+preflist.info.normal: ["0.50", "0.50", "0.50"]
+preflist.label.append.bg: ["0.60", "0.60", "0.60"]
+preflist.label.hide.bg: ["0.60", "0.60", "0.60"]
+preflist.text.bad.fg: ["0.75", "0.75", "0.75"]
+preflist.text.input.bg: ["0.70", "0.70", "0.70"]
+preflist.text.picked.bg: ["0.60", "0.60", "0.60"]
+startup.error: ["0.95", "0.95", "0.95"]
+startup.message: ["0.70", "0.70", "0.70"]
+startup.warning: ["0.78", "0.78", "0.78"]
+statusbar.bg2: ["0.50", "0.50", "0.50"]
+statusbar.fg1: ["0.69", "0.69", "0.69"]
+tooltip.fg.value: ["0.71", "0.71", "0.71"]
+
+# --- everything else ---------------------------------------------------
+channelexport.destination.bg: ["0.60", "0.60", "0.60"]
+channelexport.node.bg: ["0.40", "0.40", "0.40"]
+channelexport.node.fg: ["0.90", "0.90", "0.90"]
+chop.graph.bar.2: ["0.60", "0.60", "0.60"]
+chop.graph.bar.3: ["0.64", "0.64", "0.64"]
+chop.graph.bar.4: ["0.72", "0.72", "0.72"]
+chop.graph.bar.5: ["0.80", "0.80", "0.80"]
+chop.graph.bar.6: ["0.88", "0.88", "0.88"]
+chop.graph.bar.7: ["0.96", "0.96", "0.96"]
+chop.graph.divider: ["0.02", "0.02", "0.02"]
+chop.track.channel: ["0.40", "0.40", "0.40"]
+chop.track.label.located.bg: ["0.41", "0.41", "0.41"]
+chop.track.label.selected.bg: ["0.36", "0.36", "0.36"]
+chop.track.separator: ["0.50", "0.50", "0.50"]
+chop.track.time: ["0.26", "0.26", "0.26"]
+chop.track.timebar: ["0.06", "0.06", "0.06"]
+circle.check: ["0.72", "0.72", "0.72"]
+circle.minus: ["0.95", "0.95", "0.95"]
+desktop.exposeon: ["0.95", "0.95", "0.95"]
+desktop.nosave: ["0.45", "0.45", "0.45"]
+frameindicator.bg: ["0.60", "0.60", "0.60"]
+frameindicator.fg: ["0.70", "0.70", "0.70"]
+graph.grid.axes: ["0.20", "0.20", "0.20"]
+graph.grid.label: ["0.70", "0.70", "0.70"]
+icon.notlocated: ["0.80", "0.80", "0.80"]
+icon.shadow: ["0.40", "0.40", "0.40"]
+inputfield.disabled: ["0.40", "0.40", "0.40"]
+inputfield.enabled: ["0.10", "0.10", "0.10"]
+knob.inner: ["0.45", "0.45", "0.45"]
+knob.notch: ["0.92", "0.92", "0.92"]
+mididevice.mapper.bg: ["0.70", "0.70", "0.70"]
+mididevice.mapper.disabled: ["0.50", "0.50", "0.50"]
+mididevice.mapper.enabled: ["0.45", "0.45", "0.45"]
+overlap.bg: ["0.52", "0.52", "0.52"]
+overlap.range1: ["0.70", "0.70", "0.70"]
+overlap.range2: ["0.90", "0.90", "0.90"]
+overlap.range3: ["0.90", "0.90", "0.90"]
+playback.warning: ["0.78", "0.78", "0.78"]
+playbar.bg: ["0.60", "0.60", "0.60"]
+playbar.off: ["0.10", "0.10", "0.10"]
+playbar.on: ["0.72", "0.72", "0.72"]
+playbar.reset: ["0.93", "0.93", "0.93"]
+range.arrow.bg: ["0.60", "0.60", "0.60"]
+range.arrow.fg: ["0.70", "0.70", "0.70"]
+range.bg: ["0.50", "0.50", "0.50"]
+splitpane.bar: ["0.30", "0.30", "0.30"]
+splitpane.bar.dragging: ["0.40", "0.40", "0.40"]
+swatch.none.text: ["0.66", "0.66", "0.66"]
+top.viewer.bg: ["0.10", "0.10", "0.10"]
+top.viewer.fieldguide.grid: ["0.40", "0.40", "0.40"]
+top.viewer.fieldguide.hilite: ["0.90", "0.90", "0.90"]
+top.viewer.fieldguide.safe: ["0.70", "0.70", "0.70"]
+top.viewer.separator: ["0.50", "0.50", "0.50"]
+xcfladder.bg: ["0.10", "0.10", "0.10"]
+xcfladder.circle.baseleft: ["0.62", "0.62", "0.62"]
+xcfladder.circle.baseright: ["0.34", "0.34", "0.34"]
+xcfladder.text: ["0.60", "0.60", "0.60"]
+xcfladder.text.levels: ["0.60", "0.60", "0.60"]

@@ -1,0 +1,20 @@
+# tdtheme sparse overlay - only keys that differ from baseline.
+# file: TouchColors
+
+CHOP: ["0.985", "0.55", "0.275"]
+COMP.hilite: ["0.59", "0.59", "0.59"]
+DAT: ["0.686", "0.737", "0.2824"]
+MAT: ["1", "0.739", "0.7410"]
+POP: ["0.882", "0.4630", "0.8086"]
+POP.hilite: ["0.961", "0.6188", "0.9097"]
+SOP: ["0", "0", "0"]
+SOP.editbg: ["0", "0", "0"]
+SOP.hilite: ["0", "0", "0"]
+TOP: ["0.849", "0.1995", "0.3294"]
+chop.graph.bg: ["0.177", "0.1539", "0.1100"]
+jive.slice.bar: ["0", "0.1995", "0.3294"]
+playbar.on: ["0.849", "0.1995", "0.3294"]
+top.viewer.bg: ["0.143", "0.0896", "0.1003"]
+worksheet.bg: ["0.12", "0.1043", "0.1"]
+worksheet.grid: ["0.317", "0.189", "0.15"]
+worksheet.gridxy: ["0.513", "0.299", "0.037"]

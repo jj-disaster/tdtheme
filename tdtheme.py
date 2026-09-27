@@ -35,15 +35,21 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import tdicons
+
 __all__ = [
     "ThemeError", "FileFormatError", "ThemeNotFound", "ValidationError",
-    "TdFile", "Finding", "Status",
+    "TdFile", "Finding", "Status", "IconFinding",
     "parse", "serialize", "load_file", "read_bytes", "write_file",
     "merge", "validate", "diff",
     "load_overlay", "dump_overlay",
     "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
+    "icons_dir", "baseline_icons_dir", "theme_icons_dir", "theme_recipe_path",
     "td_version", "td_running",
-    "capture", "apply", "export", "status",
+    "list_themes", "require_theme", "theme_path",
+    "capture", "apply", "export", "status", "plan",
+    "icons_available", "icon_diff", "validate_icons", "build_icons",
+    "preview_icons",
 ]
 
 
@@ -85,6 +91,11 @@ STORE_FILES = (TOUCHCOLORS, TOUCHOPTIONS)
 #: Files whose values are RGB triples rather than opaque strings.
 COLOR_FILES = frozenset({TOUCHCOLORS})
 
+#: Name of the icon directory inside the same config tree. Not a guess: see
+#: the module docstring of tdicons.py for the `libUI.dylib` strings and the
+#: `ICO_Manager::loadIcon` call site that build `<ConfigDir>/Icons/<Name>.tiff`.
+ICONS_DIRNAME = "Icons"
+
 root = Path(__file__).resolve().parent
 baseline_dir = root / "baseline"
 themes_dir = root / "themes"
@@ -98,6 +109,23 @@ def config_dir() -> Path:
     the test-suite uses so it never touches the real install.
     """
     return Path(os.environ.get("TDTHEME_CONFIG", TD_CONFIG))
+
+
+def icons_dir() -> Path:
+    """Where TouchDesigner keeps its 97 UI icon TIFFs."""
+    return config_dir() / ICONS_DIRNAME
+
+
+def baseline_icons_dir() -> Path:
+    return baseline_dir / ICONS_DIRNAME
+
+
+def theme_icons_dir(name: str) -> Path:
+    return themes_dir / name / ICONS_DIRNAME
+
+
+def theme_recipe_path(name: str) -> Path:
+    return themes_dir / name / "icons.recipe.json"
 
 
 # --------------------------------------------------------------------------
@@ -400,11 +428,74 @@ class Finding:
         return f"[{self.severity}] {self.key}: {self.message}"
 
 
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _check_color_fields(target: TdFile, baseline: TdFile) -> "list[Finding]":
+    """Catch a colour value whose fields no longer match the shipped shape.
+
+    A real corruption motivated this. A hand-edit wrote `worksheet.grid` as
+    `0.317 0.189 <TAB> 0.15` - two channels merged into one field by a space
+    where a tab belonged. `parse` accepts it without complaint, `serialize`
+    faithfully reproduces it, and the result is a file TouchDesigner cannot
+    read - so the bad value survived `export`, and `validate` reported
+    nothing at all. Nothing downstream checks field integrity.
+
+    Every rule is stated *relative to the baseline* rather than absolutely.
+    An absolute "exactly three numeric fields" would false-positive the two
+    shipped keys that carry a stray empty leading field
+    (`dialog.commenthint`, `dialog.commenthint.comp`), and would break again
+    if a future build changed the shape. Same lesson as the size rule below:
+    a rule that fires on the untouched shipped file is worse than no rule,
+    because it fails every apply and trains the user to pass `--force`.
+    """
+    findings: "list[Finding]" = []
+    for key, value in target.data.items():
+        if not key:
+            continue
+        reference = baseline.data.get(key)
+        if reference is None:
+            continue  # unknown key; the baseline-membership check warns already
+        if len(value) != len(reference):
+            findings.append(Finding(
+                "error", key,
+                f"has {len(value)} field(s) but the baseline ships "
+                f"{len(reference)} ({reference!r}). Fields are tab-separated, "
+                f"so a stray space merges two of them and TouchDesigner reads "
+                f"the file as corrupt."
+            ))
+            continue
+        for index, text in enumerate(value):
+            if any(character.isspace() for character in text):
+                findings.append(Finding(
+                    "error", key,
+                    f"field {index + 1} contains whitespace: {text!r}. A colour "
+                    f"field is one number; two numbers in one field means a "
+                    f"space was typed where a tab belonged."
+                ))
+            elif text and not _is_number(text):
+                if _is_number(reference[index]):
+                    findings.append(Finding(
+                        "error", key,
+                        f"field {index + 1} is not numeric: {text!r} "
+                        f"(baseline has {reference[index]!r})"
+                    ))
+    return findings
+
+
 def validate(target: TdFile, baseline: "TdFile | None" = None) -> "list[Finding]":
     """Check a fully-merged file. Returns findings; errors block the write."""
     findings: "list[Finding]" = []
     keys = set(target.data)
     keys.discard("")  # blank line, not a real key
+
+    if target.name in COLOR_FILES and baseline is not None:
+        findings += _check_color_fields(target, baseline)
 
     # Only the option store has size keys; a colour store has no geometry.
     #
@@ -496,6 +587,13 @@ def td_running() -> "list[int]":
 # --------------------------------------------------------------------------
 
 def _baseline_paths() -> "dict[str, Path]":
+    """The baseline store files, and only those.
+
+    Deliberately not the icon directory. `load_baseline` parses every entry
+    here as a TdFile, so adding `Icons` would have it try to read a directory
+    as a text store. The icon set is tracked separately by
+    `baseline_icons_dir()`.
+    """
     return {name: baseline_dir / name for name in STORE_FILES}
 
 
@@ -548,9 +646,18 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     """Snapshot the installed stores as the baseline. Refuses to clobber."""
     paths = _baseline_paths()
     existing = [n for n, p in paths.items() if p.exists()]
-    if existing and not force:
+    # The icon set is part of the baseline too, so the guard has to name it.
+    # Otherwise the refusal reads "baseline already exists (TouchColors,
+    # TouchOptions)" and implies the 97 icons are not at stake, when
+    # re-capturing replaces all of them and every theme's `icons diff` is
+    # computed against the result.
+    icons_present = baseline_icons_dir().is_dir()
+    if (existing or icons_present) and not force:
+        held = list(existing)
+        if icons_present:
+            held.append(ICONS_DIRNAME)
         raise ThemeError(
-            f"baseline already exists ({', '.join(existing)}). Re-capturing changes "
+            f"baseline already exists ({', '.join(held)}). Re-capturing changes "
             f"what every existing theme diffs against. Use --force if that is intended."
         )
 
@@ -568,9 +675,19 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
         write_file(destination, raw)
         written[name] = destination
 
+    # Icons are captured too, but as a side effect rather than as a gate: a
+    # missing or unreadable icon directory must not stop someone baselining
+    # their colours. The test is on the *install* only. Testing
+    # `icons_available()` here instead would be circular - it requires the
+    # baseline directory that this line is about to create, so the very first
+    # capture would silently skip icons and no later capture would fix it.
+    if icons_dir().is_dir():
+        written.update(tdicons.capture_icons(icons_dir(), baseline_icons_dir()))
+
     write_file(_version_path(), json.dumps({
         "td_build": td_version(),
         "captured": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "icons": len(tdicons.icon_names(baseline_icons_dir())),
     }, indent=2).encode() + b"\n")
     return written
 
@@ -583,22 +700,238 @@ def list_themes() -> "list[str]":
     if not themes_dir.exists():
         return []
     return sorted(p.name for p in themes_dir.iterdir()
-                  if p.is_dir() and any(p.glob("*.yaml")))
+                  if p.is_dir() and (any(p.glob("*.yaml")) or (p / ICONS_DIRNAME).is_dir()))
+
+
+def require_theme(name: str) -> None:
+    """Raise `ThemeNotFound` unless `name` is a defined theme.
+
+    The icon commands need this separately from `_load_theme`: a theme may
+    legitimately have no `Icons/` directory, and "this theme does not theme
+    icons" is a real, reportable state. Without this check, `icons diff` and
+    `icons preview` cannot tell that apart from a typo in the theme name, and
+    quietly answer about the wrong thing - `icons preview` went so far as to
+    write a baseline contact sheet under the mistyped name.
+    """
+    if name in list_themes():
+        return
+    available = list_themes()
+    raise ThemeNotFound(
+        f"no theme {name!r}" + (f". Available: {', '.join(available)}"
+                                 if available else ". No themes defined yet.")
+    )
 
 
 def _load_theme(name: str) -> "dict[str, OrderedDict]":
-    if name not in list_themes():
-        available = list_themes()
-        raise ThemeNotFound(
-            f"no theme {name!r}" + (f". Available: {', '.join(available)}"
-                                     if available else ". No themes defined yet.")
-        )
+    require_theme(name)
     overlays = {}
     for store in STORE_FILES:
         path = theme_path(name, store)
         overlays[store] = load_overlay(path.read_text(), path.name) if path.exists() \
             else OrderedDict()
     return overlays
+
+
+# --------------------------------------------------------------------------
+# Icons
+# --------------------------------------------------------------------------
+#
+# Icons are an optional third surface alongside TouchColors and TouchOptions.
+# Every entry point here degrades to a no-op when the icon directory is absent,
+# so a TouchDesigner build without it - or a test fixture that only seeds the
+# two text stores - behaves exactly as it did before icons existed.
+
+def icons_available() -> bool:
+    """True when both the install and the baseline have an icon directory."""
+    return icons_dir().is_dir() and baseline_icons_dir().is_dir()
+
+
+@dataclass
+class IconFinding:
+    """A problem with a theme's icon set. `severity` mirrors `Finding`."""
+
+    severity: str  # "error" or "warning"
+    name: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"[{self.severity}] {self.name}: {self.message}"
+
+
+def icon_diff(name: str) -> "dict[str, str]":
+    """How a theme's icon set differs from the baseline, by sha256.
+
+    Empty dict when the theme has no icon directory, which means "this theme
+    does not theme icons" rather than "this theme's icons match". An unknown
+    theme name raises instead - an empty dict is a claim about a real theme.
+    """
+    require_theme(name)
+    theme = theme_icons_dir(name)
+    if not theme.is_dir():
+        return {}
+    return tdicons.diff_icons(baseline_icons_dir(), theme)
+
+
+def validate_icons(name: str) -> "list[IconFinding]":
+    """Check a theme's icon set before anything is written into the bundle.
+
+    Three failure modes are worth catching here rather than discovering as a
+    missing glyph in the UI:
+
+    - an icon that will not decode, which would leave TouchDesigner unable to
+      read the file at all (it logs "Couldn't find icon" and draws nothing);
+    - an icon whose dimensions changed, because TouchDesigner sizes most of
+      these glyphs from the file and a resized one is visibly wrong;
+    - an icon present in the install but absent from the theme, which is
+      harmless (it keeps its shipped bytes) but almost always means the theme
+      was generated from a stale baseline.
+
+    An unknown theme name raises rather than validating nothing, which would
+    read as a clean bill of health.
+    """
+    require_theme(name)
+    findings: "list[IconFinding]" = []
+    theme = theme_icons_dir(name)
+    if not theme.is_dir():
+        return findings
+
+    baseline = baseline_icons_dir()
+    names = tdicons.icon_names(theme)
+    if not names:
+        findings.append(IconFinding(
+            "error", ICONS_DIRNAME,
+            f"{theme} contains no .tiff files. Applying it would be a no-op; "
+            f"delete the directory or rebuild it."))
+        return findings
+
+    for icon_name in names:
+        path = theme / icon_name
+        try:
+            image = tdicons.read_tiff(path.read_bytes())
+        except tdicons.IconError as exc:
+            findings.append(IconFinding("error", icon_name, f"unreadable: {exc}"))
+            continue
+        reference = baseline / icon_name
+        if reference.exists():
+            try:
+                original = tdicons.read_tiff(reference.read_bytes())
+            except tdicons.IconError:
+                continue  # baseline problem, not a theme problem
+            if original.size != image.size:
+                findings.append(IconFinding(
+                    "error", icon_name,
+                    f"is {image.width}x{image.height} but the baseline ships "
+                    f"{original.width}x{original.height}. TouchDesigner sizes "
+                    f"these glyphs from the file, so a resized icon renders wrong."))
+        else:
+            findings.append(IconFinding(
+                "warning", icon_name,
+                "not in the baseline - a new name, or from a different build. "
+                "It will be written, but nothing here can vouch for it."))
+
+    for icon_name in tdicons.icon_names(baseline):
+        if icon_name not in names:
+            findings.append(IconFinding(
+                "warning", icon_name,
+                "in the baseline but not in this theme, so it keeps its shipped "
+                "bytes. Regenerate the theme if that is not intended."))
+    return findings
+
+
+def build_icons(name: str, *, compression: int = tdicons.COMPRESSION_LZW,
+                progress=None) -> dict:
+    """Generate a theme's icon set from the baseline using its recipe.
+
+    The recipe lives at `themes/<name>/icons.recipe.json`. A theme with an
+    icon directory but no recipe is left alone rather than rebuilt from
+    nothing - the icons may have been placed there by hand, and overwriting
+    them because a JSON file is missing would be an unrequested change.
+    """
+    if name not in list_themes():
+        raise ThemeNotFound(f"no theme {name!r}. Available: {', '.join(list_themes())}")
+    if not icons_available():
+        raise ThemeError(
+            f"no icon directory at {icons_dir()} or {baseline_icons_dir()}; "
+            f"nothing to build from. Run `tdtheme capture --force` first."
+        )
+    recipe_path = theme_recipe_path(name)
+    if not recipe_path.exists():
+        raise ThemeError(
+            f"{recipe_path} does not exist. A recipe is what says how to derive "
+            f"this theme's icons from the baseline; without one there is nothing "
+            f"to build. The existing {theme_icons_dir(name)} was left untouched."
+        )
+    recipe = tdicons.load_recipe(recipe_path)
+    return tdicons.apply_recipe(baseline_icons_dir(), theme_icons_dir(name),
+                                recipe, compression=compression, progress=progress)
+
+
+def _icons_source_dir(name):
+    """The icon directory a preview should read.
+
+    `name=None` means the baseline. That is not a cosmetic special case: the
+    baseline is the thing every theme is diffed against, so it is the only
+    preview that can answer "did the recipe change the icon I think it
+    changed, or was that glyph already like this".
+
+    A *named* theme never falls back to the baseline. It used to, and that was
+    worse than a crash: `preview_icons("typo")` silently rendered the baseline
+    and then wrote it to `typo-icons.png`, so the file name asserted something
+    the contents did not. Say so instead.
+    """
+    if name:
+        source = theme_icons_dir(name)
+        if not source.is_dir():
+            raise ThemeError(
+                f"theme {name!r} has no {ICONS_DIRNAME}/ directory to preview. "
+                f"Build it with `tdtheme icons build {name}`."
+            )
+        return source
+    baseline = baseline_icons_dir()
+    if not baseline.is_dir():
+        raise ThemeError("no baseline Icons/ to preview. Run "
+                         "`tdtheme capture --force` first.")
+    return baseline
+
+
+def preview_icons(name, path=None, *, columns: int = 10, cell: int = 72):
+    """Write a PNG contact sheet of a theme's icons. Returns the path written.
+
+    Preview only - the install gets TIFFs. This exists because the whole point
+    of regenerating 97 glyphs is that somebody has to be able to look at them.
+    `name=None` previews the baseline instead.
+
+    Validates the theme name itself rather than trusting the caller, because the
+    output file is named after the theme: a name that does not resolve must
+    never produce a picture.
+    """
+    if name is not None:
+        require_theme(name)
+    source = _icons_source_dir(name)
+    images = []
+    for icon_name in tdicons.icon_names(source):
+        images.append((icon_name, tdicons.read_tiff((source / icon_name).read_bytes())))
+    if not images:
+        raise ThemeError(f"no icons in {source}")
+    sheet = tdicons.contact_sheet(images, columns=columns, cell=cell)
+    label = name if name else "baseline"
+    destination = Path(path) if path else root / "testiconsforagents" / f"{label}-icons.png"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    write_file(destination, tdicons.png_bytes(sheet))
+    return destination
+
+
+def _apply_icon_set(name: str, backup_dir: Path) -> dict:
+    """Write a theme's icons into the install, backing up what it replaces."""
+    theme = theme_icons_dir(name)
+    if not theme.is_dir():
+        return {"applied": False, "reason": f"{name} has no icon directory",
+                "written": [], "unchanged": [], "backed_up": 0}
+    result = tdicons.copy_icons(theme, icons_dir(),
+                                backup=backup_dir / ICONS_DIRNAME,
+                                only_changed_against=baseline_icons_dir())
+    result["applied"] = True
+    return result
 
 
 def plan(name: str) -> "dict[str, TdFile]":
@@ -609,18 +942,20 @@ def plan(name: str) -> "dict[str, TdFile]":
     for store in STORE_FILES:
         merged[store] = merge(baseline[store], overlays[store])
         findings += validate(merged[store], baseline[store])
-    return {"files": merged, "findings": findings}
+    return {"files": merged, "findings": findings, "icon_findings": validate_icons(name)}
 
 
-def apply(name: str, *, force: bool = False) -> dict:
+def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
     """Merge, validate, back up, and write. Refuses on validation errors."""
     result = plan(name)
     findings = result["findings"]
+    icon_findings = result["icon_findings"]
     errors = [f for f in findings if f.severity == "error"]
+    errors += [f for f in icon_findings if f.severity == "error"]
     if errors and not force:
         raise ValidationError(
             f"theme {name!r} has {len(errors)} validation error(s); nothing written",
-            findings,
+            findings + icon_findings,
         )
 
     cfg = config_dir()
@@ -648,6 +983,13 @@ def apply(name: str, *, force: bool = False) -> dict:
     for store in STORE_FILES:
         write_file(cfg / store, result["files"][store].to_bytes())
 
+    icon_result = {"applied": False, "reason": "skipped (--no-icons)",
+                   "written": [], "unchanged": [], "backed_up": 0}
+    if icons and icons_available():
+        icon_result = _apply_icon_set(name, backup_dir)
+    elif icons:
+        icon_result["reason"] = f"no icon directory at {icons_dir()}"
+
     record_applied(name)
 
     return {
@@ -655,6 +997,8 @@ def apply(name: str, *, force: bool = False) -> dict:
         "files": list(STORE_FILES),
         "backup": backup_dir,
         "findings": findings,
+        "icon_findings": icon_findings,
+        "icons": icon_result,
         "warnings": warnings,
         "td_running": running,
     }
@@ -677,6 +1021,11 @@ def export(name: str, *, force: bool = False) -> "dict[str, Path]":
         path = theme_path(name, store)
         write_file(path, dump_overlay(sparse, store).encode())
         written[store] = path
+    if icons_available():
+        # Copy the installed icons verbatim, for the same reason the baseline
+        # does: `export` records what is installed, and re-encoding would make
+        # it impossible to tell later whether the install or the codec changed.
+        written.update(tdicons.capture_icons(icons_dir(), theme_icons_dir(name)))
     return written
 
 
@@ -701,6 +1050,21 @@ def status() -> Status:
         except ThemeError:
             baseline_present = False
 
+    # Icons drift as a set rather than a count of changed keys, but the
+    # "how many files differ" number is the same idea, so it is reported the
+    # same way and keyed under the directory name.
+    icon_drift: "dict[str, int]" = {}
+    icons_installed: "list[str]" = []
+    if baseline_icons_dir().is_dir():
+        installed = icons_dir()
+        icons_installed = tdicons.icon_names(installed)
+        if not icons_installed:
+            missing.append(ICONS_DIRNAME)
+        else:
+            changed = tdicons.diff_icons(baseline_icons_dir(), installed)
+            icon_drift[ICONS_DIRNAME] = sum(
+                1 for state in changed.values() if state == "changed")
+
     return Status(
         td_version=live,
         baseline_version=version.get("td_build"),
@@ -713,6 +1077,11 @@ def status() -> Status:
         drift=drift,
         missing=missing,
         applied=applied_theme(),
+        icons_dir=icons_dir(),
+        icon_count=len(icons_installed),
+        icon_drift=icon_drift,
+        icon_theme_drift={n: len(icon_diff(n)) for n in list_themes()
+                          if theme_icons_dir(n).is_dir()},
     )
 
 
@@ -729,9 +1098,15 @@ class Status:
     drift: "dict[str, int]"
     missing: "list[str]"
     applied: "str | None" = None
+    icons_dir: "Path | None" = None
+    icon_count: int = 0
+    icon_drift: "dict[str, int]" = field(default_factory=dict)
+    icon_theme_drift: "dict[str, int]" = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
         # `drift` is a dict that is non-empty even when every count is zero,
         # so test the values rather than the dict's truthiness.
-        return not self.missing and not any(self.drift.values())
+        return (not self.missing
+                and not any(self.drift.values())
+                and not any(self.icon_drift.values()))
