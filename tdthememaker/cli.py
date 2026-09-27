@@ -100,7 +100,6 @@ def cmd_build(args) -> int:
     recipe = json.loads(_recipe(args.name).read_text())
     compression = F.COMPRESSION_NONE if args.no_compress else F.COMPRESSION_LZW
     progress = None if args.quiet or not sys.stdout.isatty() else _bar
-    existing = F.icon_names(THEMES / args.name / "Icons") if not args.out else []
 
     # `--check` must never write. Build to a scratch directory and report the
     # difference, because a recipe cannot always reproduce what is on disk: a
@@ -122,14 +121,17 @@ def cmd_build(args) -> int:
             # installed icon the recipe reproduces exactly is simply absent
             # from it. Absence is the good case; the denominator has to be the
             # installed count, not the length of the delta.
-            changed, structural, broken, reencoded = _classify(
-                F.pixel_diff(target, Path(scratch)), installed)
+            # Decoded once and reused: it reads and decodes every TIFF in both
+            # directories, so calling it inside the loop below re-did the whole
+            # set once per icon that changed.
+            delta = F.pixel_diff(target, Path(scratch))
+            changed, structural, broken, reencoded = _classify(delta, installed)
             lost = changed + structural
             for icon in broken:
                 print(f"    cannot read installed {icon}")
             print(f"    {len(lost)} of {len(installed)} installed icons would change")
             for icon in lost:
-                print(f"      {icon}  ({F.pixel_diff(target, Path(scratch))[icon]})")
+                print(f"      {icon}  ({delta[icon]})")
             if reencoded:
                 print(f"    {len(reencoded)} more would be re-encoded but look "
                       "the same")
