@@ -149,6 +149,116 @@ check(T.load_overlay('a.b: "5"\n', "x") == OrderedDict([("a.b", ["5"])]),
 check(T.load_overlay("a.b: 5\n", "x") == OrderedDict([("a.b", ["5"])]),
       "bare unquoted scalar loads as a one-field list")
 
+# --- the two loaders must not disagree, on real files ----------------------
+#
+# A theme installs the same bytes whichever interpreter runs the tool, so the
+# PyYAML path and the fallback path have to return the same data for the same
+# file. They agree by construction on anything `json.loads` accepts, because
+# JSON is a subset of YAML. They used to disagree on everything else: the
+# fallback is `json.loads(rest)` and otherwise keeps the raw string, so a
+# single-quoted scalar came back with its quotes still attached. Nothing
+# compared the two, so the suite stayed green on both interpreters.
+#
+# Compared over the committed overlays rather than a literal, because the
+# failure mode is "a file someone actually committed parses differently".
+themes_dir = PROJECT / "themes"
+overlays = sorted(p for p in themes_dir.rglob("Touch*.yaml"))
+check(bool(overlays), f"found committed overlays to cross-check ({len(overlays)})")
+disagree = []
+for path in overlays:
+    body = path.read_text(encoding="utf-8")
+    try:
+        via_fallback = T._load_overlay_fallback(body, path.name)
+    except T.FileFormatError as exc:
+        via_fallback = f"error: {exc}"
+    try:
+        via_yaml = T.load_overlay(body, path.name)
+    except T.FileFormatError as exc:
+        via_yaml = f"error: {exc}"
+    if via_fallback != via_yaml:
+        disagree.append(path.name)
+check(not disagree,
+      f"fallback and PyYAML agree on all {len(overlays)} committed overlays"
+      + (f" (differ: {disagree})" if disagree else ""))
+
+# Single quotes are the case that actually bit: `origsize: '11'` loaded as the
+# three characters '11' under the fallback and as 11 under PyYAML, so the same
+# theme installed differently on different machines. The fallback now refuses
+# it and names the forms that mean the same thing in both loaders.
+for _label, _text in (("scalar", "tile.inout.origsize: '11'\n"),
+                      ("list", "worksheet.bg: ['0.1', '0.2']\n")):
+    raises(T.FileFormatError,
+          lambda t=_text: T._load_overlay_fallback(t, "x"),
+          f"single-quoted {_label} is refused by the fallback loader")
+    try:
+        T._load_overlay_fallback(_text, "x")
+    except T.FileFormatError as exc:
+        check("double-quoted" in str(exc),
+              f"the single-quoted {_label} error names the double-quoted form")
+
+# A value that merely contains an apostrophe is not a quoted scalar, and
+# refusing it would be over-blocking: `it's fine` is a perfectly good value.
+check(T._load_overlay_fallback("tile.inout.label: it's fine\n", "x")
+      == OrderedDict([("tile.inout.label", ["it's fine"])]),
+      "an apostrophe inside a value is not mistaken for quoting")
+
+# The same reasoning closes the rest of the class. Each of these is a YAML
+# construct the restricted loader cannot replicate, and each used to be kept as
+# literal text while PyYAML interpreted it - a silent disagreement, which is
+# worse than the single-quote case because nothing looks wrong. A flow mapping
+# installed as the string `{a: 1}`; an alias installed as `*x` where PyYAML
+# resolved it to the anchored value.
+for _label, _text in (("flow mapping", "k: {a: 1}\n"),
+                      ("anchor", "a: &x 1\n"),
+                      ("alias", "b: *x\n"),
+                      ("tag", "k: !!str 1\n"),
+                      ("block scalar", "k: |\n  a\n  b\n"),
+                      ("reserved @", "k: @text\n"),
+                      ("backtick", "k: `text\n"),
+                      ("bare list items", "k: [a, b]\n")):
+    raises(T.FileFormatError,
+          lambda t=_text: T._load_overlay_fallback(t, "x"),
+          f"{_label} is refused rather than kept as literal text")
+    try:
+        T._load_overlay_fallback(_text, "x")
+    except T.FileFormatError as exc:
+        # The refusal has to be actionable: it should name a form to write
+        # instead, not just report that the input was rejected.
+        check(('not general YAML' in str(exc)) or ('must be quoted' in str(exc)),
+              f"the refusal for {_label} names a form to write instead")
+
+# A leading '-' is not a YAML construct, so a negative number and a hyphenated
+# word must both still load. This is the over-blocking case for the guard above.
+for _label, _text in (("negative number", "k: -0.5\n"),
+                      ("hyphenated word", "k: a-b\n")):
+    try:
+        T._load_overlay_fallback(_text, "x")
+        check(True, f"{_label} still loads (the guard is not over-broad)")
+    except T.FileFormatError as exc:
+        check(False, f"{_label} still loads (the guard is not over-broad): {exc}")
+
+# The documented forms must keep working, and identically, through both.
+for _label, _text in (("bare", "tile.inout.origsize: 11\n"),
+                      ("double-quoted", 'tile.inout.origsize: "11"\n'),
+                      ("json list", 'worksheet.bg: ["0.1", "0.2", "0.3"]\n')):
+    check(T._load_overlay_fallback(_text, "x") == T.load_overlay(_text, "x"),
+          f"documented {_label} form loads identically in both loaders")
+
+# --- a non-numeric size is an error, not a warning --------------------------
+#
+# This is the other half of the same bug. `apply` gates on severity "error"
+# only, so as a warning the quoted size sailed through and was written into the
+# install; TouchDesigner then read an unparseable geometry.
+_options_base = T.load_file(SEED / T.TOUCHOPTIONS, T.TOUCHOPTIONS)
+_quoted = _options_base.copy()
+_quoted.data["tile.inout.origsize"] = ["'11'"]
+_quoted_findings = T.validate(_quoted, _options_base)
+check(any(f.severity == "error" for f in _quoted_findings),
+      "a non-numeric size is an error, so apply refuses it")
+check(not [f for f in _quoted_findings
+           if f.severity == "warning" and "not numeric" in f.message],
+      "the non-numeric size is no longer reported as a mere warning")
+
 # ---------------------------------------------------------------- merge/diff
 
 print()

@@ -312,6 +312,11 @@ def _coerce_overlay_value(key: str, value, where: str) -> "list[str]":
     )
 
 
+#: The YAML indicator characters that begin a construct the restricted loader
+#: cannot replicate. Refused rather than kept as literal text, so the fallback
+#: and a PyYAML-backed run can never disagree about what a value means.
+_YAML_ONLY_INDICATORS = frozenset("{&*!|>%@`")
+
 def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]":
     """Zero-dependency loader for the restricted subset a theme overlay uses."""
     data: "OrderedDict[str, list[str]]" = OrderedDict()
@@ -334,12 +339,66 @@ def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]
                 f"is not supported in v1 - remove the line instead."
             )
         if rest.startswith("["):
+            if "'" in rest:
+                raise FileFormatError(
+                    f"{name or 'overlay'}: line {lineno} list is single-quoted: "
+                    f"{rest!r}. This loader reads a bare or double-quoted list, "
+                    f"so the quotes would have to be written into the store. "
+                    f'Use ["a", "b"] or [a, b] instead.'
+                )
             try:
                 value = json.loads(rest)
             except json.JSONDecodeError as exc:
+                # `json`'s own message ("Expecting value: line 1 column 2") is
+                # accurate and useless to someone writing a theme: the usual
+                # cause is a bare item, `[a, b]`, which is valid YAML and not
+                # valid JSON. Say so, and say what to write instead.
                 raise FileFormatError(
-                    f"{name or 'overlay'}: line {lineno} bad list: {exc}"
+                    f"{name or 'overlay'}: line {lineno} could not read the "
+                    f"list {rest!r}: {exc}. List items must be quoted - write "
+                    f'["a", "b"], not [a, b].'
                 ) from exc
+        elif rest.startswith("'"):
+            # A YAML single-quoted scalar, which this loader cannot unquote.
+            # Keeping the quotes would write them into the store, so
+            # `origsize: '11'` would install the three characters '11' while
+            # PyYAML installs 11 - the same file behaving differently
+            # depending on which interpreter ran it. Refuse it instead, and
+            # name the two forms that mean the same thing in both loaders.
+            # A value merely *containing* an apostrophe is unaffected: only a
+            # leading quote is ambiguous.
+            inner = rest[1:-1] if rest.endswith("'") and len(rest) > 1 else rest[1:]
+            raise FileFormatError(
+                f"{name or 'overlay'}: line {lineno} value is single-quoted: "
+                f"{rest!r}. This loader accepts a bare value or a "
+                f'double-quoted string, and cannot strip single quotes - '
+                f'write {inner!r} or "{inner}" instead.'
+            )
+        elif rest[0] in _YAML_ONLY_INDICATORS:
+            # The remaining YAML indicator characters introduce constructs this
+            # loader cannot replicate, so every one of them is a place the two
+            # loaders could silently return different data for the same file.
+            # `{` a flow mapping - kept here as the literal text `{a: 1}`.
+            # `&` an anchor and `*` an alias - kept as the literal `&x`/`*x`,
+            #   where PyYAML resolves the alias and writes the anchored value.
+            # `!` a tag, `|` and `>` block scalars, `%` a directive, `@` and
+            #   backtick reserved indicators.
+            #
+            # Refusing the indicator is the point: a theme has to install the
+            # same bytes whichever interpreter reads it, so an ambiguous value
+            # is an error rather than a guess. Which one it is barely matters -
+            # the value is not one this tool documents, and the message says so.
+            kind = {"{": "a flow mapping", "&": "an anchor", "*": "an alias",
+                    "!": "a tag", "|": "a block scalar", ">": "a folded scalar",
+                    "%": "a directive", "@": "a reserved indicator",
+                    "`": "a reserved indicator"}[rest[0]]
+            raise FileFormatError(
+                f"{name or 'overlay'}: line {lineno} value starts with "
+                f"{rest[0]!r}, which is {kind}: {rest!r}. This tool reads a "
+                f"restricted subset, not general YAML, and would keep the "
+                f"characters as literal text. Use a bare value, a "
+                f'double-quoted string, or a list like ["a", "b"].'
+            )
         else:
             try:
                 value = json.loads(rest)
@@ -486,8 +545,20 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
             try:
                 number = float(value[0])
             except ValueError:
-                findings.append(Finding("warning", key,
-                                        f"size is not numeric: {value[0]!r}"))
+                # An error, not a warning. A `.size` field that will not parse
+                # as a number is always a mistake, and it is the shape a
+                # mis-quoted value takes: `origsize: '11'` reaches here as the
+                # three characters '11'. As a warning this sailed through
+                # `apply`, which gates on errors only, and wrote the quotes
+                # into the install. TouchDesigner then reads an unparseable
+                # geometry, which is the layout-destroying failure this whole
+                # check exists to catch.
+                findings.append(Finding(
+                    "error", key,
+                    f"size is not numeric: {value[0]!r}. If the value is "
+                    f"quoted, write it bare or double-quoted - this tool does "
+                    f"not accept single-quoted values, and they would be "
+                    f"written through with their quotes intact"))
                 continue
             if number > 0:
                 continue

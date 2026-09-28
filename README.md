@@ -68,6 +68,42 @@ Sparse rather than full-file copies because a TouchDesigner update can add
 new keys. A full copy would silently drop them; an overlay inherits them
 from the baseline.
 
+### The accepted value syntax
+
+`tdtheme` is standard-library-only, so it reads overlays with its own small
+parser rather than a YAML library. It is deliberately **not** general YAML, and
+it is strict on purpose: a theme must install the same bytes whichever
+interpreter runs the tool, so anything ambiguous is refused rather than guessed.
+
+| form | example | |
+|---|---|---|
+| double-quoted string | `key: "text"` | ✅ |
+| bare scalar | `key: 11` | ✅ |
+| list, quoted items | `key: ["a", "b"]` | ✅ the usual way to write a colour |
+| comments and blank lines | `# note` | ✅ |
+| single-quoted | `key: 'text'` | ❌ refused |
+| list, bare items | `key: [a, b]` | ❌ refused |
+| flow mapping | `key: {a: 1}` | ❌ refused |
+| anchor / alias | `a: &x 1`, `b: *x` | ❌ refused |
+| block scalar | `key: \|` | ❌ refused |
+
+Two rows earn their keep.
+
+**Single quotes** are the one people reach for, and they are refused on purpose.
+A YAML-aware reader strips them; this parser cannot, so accepting them would
+write `'text'` — quotes included — into the store, and a quoted `.size` value
+becomes a geometry TouchDesigner cannot parse. Write `"text"` or bare `text`.
+
+**Bare list items** (`[a, b]`) look equivalent to `["a", "b"]` and are not:
+they are valid YAML but not valid JSON, and this parser only reads lists whose
+items are quoted. Quote the items.
+
+Everything outside the table is refused with a message naming the construct,
+rather than partially understood. That is the design: a refused overlay is a
+five-second fix, whereas a misread one installs a theme that looks applied and
+is not. A leading `-` is fine (`key: -0.5`), since a bare `-` is not a
+construct without a space after it.
+
 To build one by hand, copy `themes/midnight/` and edit the YAML. To capture
 what you have currently set in TouchDesigner as a new theme, use
 `tdthememaker/` - see [Writing themes](#writing-themes).
