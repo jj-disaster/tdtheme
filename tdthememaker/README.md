@@ -9,14 +9,21 @@ instructions into a complete 97-icon directory — and it can also record the
 current install as a new theme.
 
 ```
-python3 -m tdthememaker.cli list                      # what recipes exist
-python3 -m tdthememaker.cli diff mono                 # which icons a set actually repaints
-python3 -m tdthememaker.cli build midnight            # regenerate a theme's icons
-python3 -m tdthememaker.cli build midnight --check    # report what would change, write nothing
-python3 -m tdthememaker.cli export mytheme            # record the installed state as a theme
-python3 -m tdthememaker.cli preview midnight          # contact sheet PNG
+tdthememaker list                      # what recipes exist
+tdthememaker diff mono                 # which icons a set actually repaints
+tdthememaker build midnight            # regenerate a theme's icons
+tdthememaker build midnight --check    # report what would change, write nothing
+tdthememaker export mytheme            # record the installed state as a theme
+tdthememaker preview midnight          # contact sheet PNG
 python3 tdthememaker/tests/test_thememaker.py    # generation + export
 ```
+
+`tdthememaker` is a wrapper at the repository root, `tdthememaker-cli`, symlinked
+onto `PATH` under the name above — the package directory already owns
+`tdthememaker`, so the file is named differently and the command is not. It runs
+from any directory, and unlike `cd`-ing to the repository first, it leaves the
+working directory alone. Without the symlink, `python3 -m tdthememaker.cli ...`
+still works from the repository root.
 
 `export` is the one command that needs `tdtheme` to be present. Everything else
 runs without it — see [Two dependencies, and why they differ](#two-dependencies-and-why-they-differ).
@@ -123,6 +130,7 @@ __init__.py          the package, and the two halves it holds
 icons.py             codec, ops, recipe engine, set diffing, contact sheets
 theme.py             export: sparse colour overlay + verbatim icon copy
 cli.py               list / build / diff / export / preview
+../tdthememaker-cli  the wrapper; symlinked onto PATH as `tdthememaker`
 recipes/             one <name>.recipe.json per theme
 tests/               test_thememaker.py
 ```

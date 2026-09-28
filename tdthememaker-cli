@@ -1,0 +1,40 @@
+#!/bin/sh
+# Convenience wrapper so the authoring tool can be run as
+# `tdthememaker <command>` from any directory, for the same reason `tdtheme`
+# is: the working directory should not be part of the command.
+#
+# The file is not named `tdthememaker` because the Python package already owns
+# that name in this directory. It is meant to be symlinked onto PATH under the
+# name the tool is actually called by, which is the only name that matters at
+# the prompt:
+#
+#     ln -s "$PWD/tdthememaker-cli" /opt/homebrew/bin/tdthememaker
+#
+# The symlink loop is the same one `tdtheme` uses, and has to be: this script is
+# meant to be symlinked onto PATH, where $0 is the symlink rather than this
+# file, so `dirname $0` alone would name the directory holding the link. macOS
+# has no `readlink -f`, hence the loop. Two copies of it rather than a shared
+# sourced file, because a missing or renamed common file would break both
+# commands at once, and the tests hold the two in agreement instead.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname -- "$target")/$link ;;
+    esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
+
+# On PYTHONPATH rather than `cd`. `tdthememaker/cli.py` uses relative imports,
+# so it has to be run as a module of an importable package, and putting the
+# repository on the path achieves that without moving the caller - which also
+# keeps a relative path they pass, such as `preview --out sheet.png`, meaning
+# what they meant.
+if [ -n "$PYTHONPATH" ]; then
+    PYTHONPATH="$here:$PYTHONPATH"
+else
+    PYTHONPATH="$here"
+fi
+export PYTHONPATH
+exec python3 -m tdthememaker.cli "$@"

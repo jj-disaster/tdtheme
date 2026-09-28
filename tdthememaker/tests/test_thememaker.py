@@ -1039,6 +1039,85 @@ check_blank_warn_face(
     f"the hand-placed icon is still {WARN_FACE_SIZE[0]}x{WARN_FACE_SIZE[1]} "
     f"and every decoded byte is zero after the export tests")
 
+# ------------------------------------------------------------ the wrapper
+#
+# The other entry point, and the one that had none. `tdthememaker` was only
+# reachable as `python3 -m tdthememaker.cli`, which needs the repository root
+# as the working directory; there is now a `tdthememaker-cli` wrapper beside
+# `tdtheme` and a symlink for it on PATH.
+#
+# The symlink loop is duplicated from the `tdtheme` wrapper rather than shared,
+# so these checks and the equivalent ones in tests/test_tdtheme.py are what hold
+# the two copies in agreement. The file is not named `tdthememaker` because the
+# package directory already owns that name.
+WRAPPER = ROOT / "tdthememaker-cli"
+check(WRAPPER.is_file() and os.access(WRAPPER, os.X_OK),
+      "the ./tdthememaker-cli wrapper exists and is executable")
+
+away = tmp / "elsewhere"
+away.mkdir(parents=True, exist_ok=True)
+links = tmp / "links"
+links.mkdir(parents=True, exist_ok=True)
+
+
+def run_wrapper(argv, cwd, path_prefix=()):
+    env = dict(os.environ)
+    if path_prefix:
+        env["PATH"] = os.pathsep.join(
+            [str(p) for p in path_prefix] + [env.get("PATH", "")])
+    return subprocess.run(argv, capture_output=True, text=True, cwd=cwd, env=env)
+
+
+def tail(result, n=70):
+    """Whatever the wrapper complained about, for a failing check to explain."""
+    return result.stderr.strip()[:n].replace("\n", " ")
+
+
+direct = run_wrapper([str(WRAPPER), "list"], away)
+check(direct.returncode == 0 and "defaultnowarn" in direct.stdout,
+      f"the wrapper runs from an unrelated directory and imports the package "
+      f"(exit {direct.returncode}: {tail(direct)})")
+
+# The three link shapes the resolution loop has to handle. The relative path is
+# computed between *realpaths*: this suite's temp dir is reached through
+# /var -> /private/var, so relpath between the logical paths yields one `..` too
+# few and the link dangles - a broken test that reads as a broken wrapper.
+(links / "absolute").symlink_to(WRAPPER)
+(links / "relative").symlink_to(
+    os.path.relpath(os.path.realpath(WRAPPER), os.path.realpath(links)))
+(links / "chained").symlink_to("absolute")
+for name in ("absolute", "relative", "chained"):
+    result = run_wrapper([str(links / name), "list"], away)
+    check(result.returncode == 0,
+          f"the wrapper resolves a {name} symlink to itself "
+          f"(exit {result.returncode}: {tail(result, 60)})")
+
+bare = run_wrapper(["tdthememaker", "list"], away, path_prefix=[links])
+check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
+      f"`tdthememaker` works as a bare command found on PATH "
+      f"(exit {bare.returncode}: {tail(bare)})")
+
+# What this wrapper does that `tdtheme` does not have to: it puts the repository
+# on PYTHONPATH rather than `cd`-ing there, because the package uses relative
+# imports and has to be run as a module. The point of avoiding `cd` is that a
+# relative path the caller passes still means what they meant, so check that
+# rather than assume it.
+sheet = away / "sheet.png"
+written = run_wrapper([str(WRAPPER), "preview", "mono", "--out", "sheet.png"],
+                      away)
+check(written.returncode == 0 and sheet.is_file(),
+      f"a relative --out lands in the caller's directory, not the repository's "
+      f"(exit {written.returncode}: {tail(written, 50)})")
+check(not (ROOT / "sheet.png").exists(),
+      "and nothing was written into the repository root")
+
+# A pre-existing PYTHONPATH must survive: prepending is right, replacing would
+# silently break whatever the caller had set up.
+kept = run_wrapper([str(WRAPPER), "list"], away)
+check(kept.returncode == 0,
+      f"the wrapper runs with the caller's environment intact "
+      f"(exit {kept.returncode})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 
 print()

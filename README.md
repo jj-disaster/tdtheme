@@ -29,8 +29,16 @@ second, silently-drifting copy of the same themes - and `apply` would install
 from whichever one it found.
 
 `check-td-writes` can be symlinked the same way if you want it on `PATH` too.
-`tdthememaker` has no wrapper; it is run as `python3 -m tdthememaker.cli`, which
-needs the repository root as the working directory.
+`tdthememaker` has a wrapper for the same reason, in `tdthememaker-cli` - the
+package directory already owns the `tdthememaker` name, so the file is named
+differently and symlinked under the name the tool answers to:
+
+```sh
+ln -s "$PWD/tdthememaker-cli" /opt/homebrew/bin/tdthememaker
+```
+
+It works from any directory too, and keeps the working directory where you left
+it, so a relative path you pass means what you meant.
 
 ## What it actually edits
 
