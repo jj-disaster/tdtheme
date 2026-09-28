@@ -117,12 +117,11 @@ the two stores.
 that is deliberate. A theme with no `Icons/` directory would write nothing, so
 applying `sunset` and then `default` would leave sunset's icons in the install
 while claiming to be stock. A total overwrite is the only model where switching
-themes cannot leak state. The cost is disk - 1.2 MB across the five shipped
-sets, against a few KB for a delta scheme - and that was an accepted trade.
+themes cannot leak state. The cost is disk - 1.9 MB across the six shipped sets,
+against a few KB for a delta scheme - and that was an accepted trade.
 
-**Each set is generated from a recipe**, which lives in the separate
-`tdthememaker` tool, so the binary blobs in git are reproducible artefacts rather
-than the source of truth:
+**Each set is generated from a recipe**, which lives in `tdthememaker/`, so the
+binary blobs in git are reproducible artefacts rather than the source of truth:
 
 ```json
 {
@@ -192,40 +191,31 @@ recipe did nothing to them.
 
 - `tdtheme icons diff` decodes and compares **pixels**, which is the honest
   number. `--bytes` skips the decode.
-- `tdtheme list` and `tdtheme status` stay byte-level: decoding all five theme
-  sets costs 1.5s, and those two are meant to be glanced at. They say "differ
+- `tdtheme list` and `tdtheme status` stay byte-level: decoding all six theme
+  sets costs 1.8s, and those two are meant to be glanced at. They say "differ
   in bytes" for that reason.
 
 ### The alpha trap
 
-Two traps, both silent, both of which this tool fell into first.
+Two traps, both silent, both of which this tool fell into first. The full
+derivation, with the measurements behind it, is in
+[docs/reverse-engineering.md §5](docs/reverse-engineering.md); this is the
+summary.
 
 **1. Do not trust the `ExtraSamples` tag.** 95 of the 97 shipped icons declare
 premultiplied alpha - and 23 of those are lying. They contain straight samples.
 That is decidable rather than a matter of taste: in genuine premultiplied data
 no channel can exceed alpha, so a single pixel with `max(RGB) > alpha` refutes
-the tag. `Bypass.tiff` violates the invariant on 98 of its 102 partial-alpha
-pixels; the 68 genuine cases violate it zero times, so the two populations are
-cleanly separated. Believing the tag un-premultiplies `(102,102,102,a=91)` into
-`(285,285,285)`, which clamps to white, and the whole edge ramp collapses -
-a 16x16 glyph becomes a blocky silhouette. So `read_tiff` decides from the
-samples and treats the tag as metadata about intent.
+the tag, and the 68 genuine cases never violate it. So `read_tiff` decides from
+the samples and treats the tag as metadata about intent.
 
 **2. Write premultiplied, because that is what TouchDesigner composites.**
 This tool un-premultiplies on read so the transforms can reason in straight
-alpha, and then has to multiply back on the way out. The temptation is to
-declare the result `ExtraSamples = 2` (unassociated) on the grounds that TIFF
-leaves the convention undefined and generic decoders assume associated. That is
-true of libtiff, Photoshop and image viewers, and irrelevant here: the one
-decoder that matters is TouchDesigner's, and it wants the same convention as the
-files it already ships. `libPOP.dylib` carries explicit `premult`,
-`premultcolor` and `premultrgbbyalpha` handling.
-
-Writing straight alpha into a premultiplied compositor is not cosmetic. The
-compositor computes `src + bg*(1-a)`, so a pixel with alpha 13/255 whose colour
-is the full tint lands at luma 171 instead of 8.8. Every antialiased edge pixel
-draws at full strength, which closes the gaps between strokes and makes small
-glyphs read as pixelated. Measured on a 24x24 glyph, the whole icon came out
+alpha, and multiplies back on the way out. The temptation is to declare the
+result `ExtraSamples = 2` (unassociated) since generic decoders would then
+assume straight - irrelevant here, because the only decoder that matters
+composites premultiplied. Writing straight data makes every antialiased edge
+pixel draw at full strength; measured on a 24x24 glyph, the icon came out
 **2.83x too heavy**.
 
 Getting either wrong is silent. The file is a perfectly valid TIFF, it decodes
@@ -324,13 +314,13 @@ update to confirm this still holds for that build.
 
 ## Known limitations
 
-- **Icon storage is wasteful by design.** Five complete sets come to 1.2 MB
+- **Icon storage is wasteful by design.** Six complete sets come to 1.9 MB
   where a delta scheme would be a few KB. A complete set per theme is what makes
   `apply` a total overwrite and `default` a lossless reset; sharing or
   deduplicating the unchanged icons would reintroduce the leak that design
-  avoids. The four regenerated sets are 97-101 KB each rather than the stock
+  avoids. The regenerated sets are 97-128 KB each rather than the stock
   764 KB, because re-encoding drops the Photoshop metadata and re-applies LZW -
-  the bulk of the 1.2 MB is `default`, which copies the baseline verbatim.
+  the bulk of the 1.9 MB is `default`, which copies the baseline verbatim.
 - **The TIFF codec handles only what TouchDesigner ships**: little-endian
   classic TIFF, single page, 8 bits per sample, photometric RGB, LZW or
   uncompressed, 3 or 4 samples. Big-endian, planar, 16-bit and palette images
@@ -359,10 +349,12 @@ update to confirm this still holds for that build.
 
 ```
 tdtheme.py              core library - no argparse, no print, so a GUI can reuse it
-tdicons.py              TIFF/LZW reader, icon-set validation and install, PNG previews
+tdtiff.py               the TIFF reader, shared by tdicons.py and tdthememaker
+tdicons.py              icon-set validation and install, PNG previews
 cli.py                  argument parsing and output
 tdtheme                 shell wrapper
 check-td-writes         settles whether TouchDesigner writes these files
+docs/                   background reading; see Documentation below
 baseline/               captured pristine files + Icons/ + version.json
 themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full set)
 backups/<timestamp>/    automatic, before every apply
@@ -382,14 +374,18 @@ than printing it, so a GUI front-end can be added without touching the core.
 imaging dependency - so the icon work did not compromise that rule.
 
 `tdicons.py` also no longer writes a TIFF. It reads them, to validate and to
-compare, and copies them, to install. Writing lives in `tdthememaker/`, which
-carries its own copy of the codec; the duplicated part is only the reader, and
-both copies are held to the same tests.
+compare, and copies them, to install. Writing lives in `tdthememaker/`, and the
+reader both of them use lives in `tdtiff.py`, which is the leaf of the import
+graph: `tdicons.read_tiff` and `tdtiff.read_tiff` are the same function, reached
+under two names. So there is one reader to get right and one writer, rather than
+two of each.
 
 ## Writing themes
 
-Authoring a theme is the other direction, and it is a separate tool. Generation
-lives in `tdthememaker/`; so does writing a theme out of the live install:
+Authoring a theme is the other direction, and it is a separate command. It
+lives in `tdthememaker/`, in this repository and sharing `tdtiff.py`, but under
+its own entry point: generation is there, and so is writing a theme out of the
+live install:
 
 ```
 python3 -m tdthememaker.cli build mytheme     # generate the icon set
@@ -440,5 +436,26 @@ re-checks the baseline build number on every `status`.
 The tool has **no third-party dependencies**. It uses PyYAML when
 importable (TouchDesigner bundles 6.0.3) and otherwise falls back to a
 loader covering the exact YAML subset it emits. The icon work kept that rule:
-`tdicons.py` is standard library only, including its own TIFF/LZW codec and PNG
-writer.
+`tdtiff.py` is standard library only, including the TIFF/LZW reader and the
+PNG writer.
+
+## Documentation
+
+`docs/` is background. Nothing there is needed to use the tool, and the README
+above is the thing to read first.
+
+- **[docs/parameter-reference.md](docs/parameter-reference.md)** — what each
+  key in `TouchColors` and `TouchOptions` is understood to do. It marks which
+  keys were verified empirically and which are only understood by naming
+  convention, so read the confidence notes before trusting a value. Derivative
+  documents none of this; the format is a black box.
+- **[docs/reverse-engineering.md](docs/reverse-engineering.md)** — how the
+  format and the icon path were recovered from the `dylib` symbol tables, and
+  what is actually known about them. This is also the canonical account of the
+  TIFF alpha convention (`ExtraSamples` and premultiplication), which the
+  README summarises and the code implements.
+- **[docs/icon-storage-design.md](docs/icon-storage-design.md)** — **a design
+  note for work that was not done.** It proposes storing icon sets sparsely
+  instead of shipping all 97 files per theme, and records the measurements
+  behind the idea. Nothing in it is built. Where it disagrees with the code,
+  the code is the current behaviour.

@@ -334,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "Icons/ directory of 97 TIFFs, which this tool merges, "
                     "validates and installs. Authoring - generating icon sets "
                     "from recipes, and exporting the current state as a new "
-                    "theme - is a separate tool, tdthememaker.",
+                    "theme - is a separate command, tdthememaker.",
         epilog="TouchDesigner reads TouchColors and TouchOptions at startup and "
                "caches each icon on first use, so restart it to see a change "
                "take effect.",

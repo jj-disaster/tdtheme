@@ -15,7 +15,7 @@ python3 -m tdthememaker.cli build midnight            # regenerate a theme's ico
 python3 -m tdthememaker.cli build midnight --check    # report what would change, write nothing
 python3 -m tdthememaker.cli export mytheme            # record the installed state as a theme
 python3 -m tdthememaker.cli preview midnight          # contact sheet PNG
-python3 tests/test_thememaker.py         # 120 checks
+python3 tdthememaker/tests/test_thememaker.py    # generation + export
 ```
 
 `export` is the one command that needs `tdtheme` to be present. Everything else
@@ -98,9 +98,9 @@ Two things to know before writing one:
 
 ## Reproducibility
 
-`tests/test_thememaker.py` asserts that every committed theme set is reproduced
-**byte for byte** from its recipe, which is what makes a recipe a source
-description rather than a historical note. Five of the six do.
+`tdthememaker/tests/test_thememaker.py` asserts that every committed theme set
+is reproduced **byte for byte** from its recipe, which is what makes a recipe a
+source description rather than a historical note. Five of the six do.
 
 `defaultnowarn` does not, and cannot: its recipe is empty, so a rebuild is a
 verbatim baseline copy, but its `WarnFace.tiff` is a hand-placed blanked face
@@ -129,10 +129,11 @@ tests/               test_thememaker.py
 
 ## Two dependencies, and why they differ
 
-The TIFF codec is **duplicated** from `../tdicons.py` rather than
-imported, so the icon half stands alone and can move to its own repository.
-Only the read side is duplicated — `tdtheme` keeps a reader for validation and
-never writes a TIFF — and both copies are held to equivalent tests.
+The TIFF reader is **shared**. It lives in `../tdtiff.py` — the leaf of the
+import graph, which imports nothing from this project — and both `../tdicons.py`
+and `icons.py` re-export it, so `read_tiff` is one function reached under three
+names rather than two implementations to keep in agreement. The *writer* stays
+here, because `tdtheme` reads and copies icons but never encodes one.
 
 The colour-store layer is **imported**. `theme.py` pulls in `tdtheme`'s
 restricted YAML parser, sparse differ and field-integrity rules, because this

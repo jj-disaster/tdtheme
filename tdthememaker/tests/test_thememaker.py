@@ -12,7 +12,7 @@ The most important test in the file is the last one: every committed theme's
 icon set must be reproducible, byte for byte, from its recipe. That is what
 makes a recipe a real source description rather than a historical note.
 
-Run:  python3 tests/test_thememaker.py
+Run:  python3 tdthememaker/tests/test_thememaker.py
 """
 
 from __future__ import annotations
@@ -245,7 +245,9 @@ check(found_multi == sorted(MULTI_STRIP),
 # 95 of the 97 shipped icons are premultiplied, which is the single most
 # consequential fact about this file format. A reader that treats them as
 # straight alpha renders every glyph too light; one that treats straight data
-# as premultiplied renders it too dark. Both are silent.
+# as premultiplied renders it too dark. Both are silent. The two blocks below
+# test both directions against that fact; ../docs/reverse-engineering.md §5 is
+# where it is derived.
 alpha_hist = {}
 for v in shipped.values():
     alpha_hist[v["alpha"]] = alpha_hist.get(v["alpha"], 0) + 1
@@ -274,15 +276,14 @@ for theme in THEMES:
           f"{theme}: regenerated icons declare premultiplied alpha, matching "
           f"the shipped set (got {sorted(kinds)})")
 
-# The tag is not to be trusted, and 23 of the 97 shipped icons prove it. They
-# declare premultiplied alpha and contain straight samples. This is decidable
-# rather than a matter of taste: in genuine premultiplied data no channel can
-# exceed alpha, so one pixel with max(RGB) > alpha refutes the tag outright.
-#
-# Believing the tag cost those 23 icons their antialiasing. Un-premultiplying
-# (102,102,102,a=91) yields (285,285,285), which clamps to white, and the whole
-# edge ramp collapses to solid white - a 16x16 glyph turns into a blocky
-# silhouette. So the reader decides from the data.
+# The tag is not to be trusted, and 23 of the 97 shipped icons prove it: they
+# declare premultiplied alpha and contain straight samples. That is decidable
+# rather than a matter of taste, because in genuine premultiplied data no
+# channel can exceed alpha, so one pixel with max(RGB) > alpha refutes the tag
+# outright. Believing it cost those 23 icons their antialiasing, since
+# un-premultiplying (102,102,102,a=91) yields (285,285,285) and clamps the
+# whole edge ramp to white. So the reader decides from the data.
+# ../docs/reverse-engineering.md §5 has the measurements.
 def stored_samples(raw):
     """The samples as they sit in the file, before any alpha interpretation."""
     entries = icons._ifd_entries(raw, int.from_bytes(raw[4:8], "little"))

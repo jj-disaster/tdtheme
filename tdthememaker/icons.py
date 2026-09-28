@@ -41,24 +41,24 @@ arithmetic, and the round-trip is testable - `../tests/test_icons.py` decodes al
 independent check is wanted, `sips` (macOS ImageIO, i.e. a different libtiff)
 is asked to read what we wrote.
 
-The codec is duplicated from `../tdicons.py` rather than imported, so
-this tool stands alone and can move to its own repository. Only the read side
-is duplicated; `tdtheme` keeps a reader for validation and never writes TIFFs,
-so the subtle parts - alpha-convention detection, premultiplied round-tripping
-- have exactly one implementation that matters at install time, and the copies
-are held to the same test suite.
+The codec is shared, not duplicated: `../tdtiff.py` holds the reader and both
+this module and `../tdicons.py` re-export it, so `read_tiff` is one function
+reached under three names. Only the writer lives here, because `tdtheme` reads
+and copies icons but never encodes one. That split is what leaves the subtle
+parts - alpha-convention detection, premultiplied round-tripping - with exactly
+one implementation, rather than two that have to be kept in agreement.
 
 The two alpha traps, in one paragraph
 -------------------------------------
 
-Reading: 23 of the 95 icons declaring premultiplied alpha contain straight
-samples, and the tag lies about them. It is decidable - in genuine
-premultiplied data no channel can exceed alpha, so one pixel with
-`max(RGB) > alpha` refutes the tag. Writing: output must be premultiplied,
-because TouchDesigner's compositor evaluates `src + bg*(1-a)` and straight
-data draws every antialiased edge at full strength, making icons read
-blocky. Getting this wrong is silent: the file is valid, it decodes fine, and
-it renders wrong. Both directions are exercised against `sips` in the tests.
+Reading: the `ExtraSamples` tag lies about 23 of the 95 shipped icons that
+declare premultiplied alpha - they contain straight samples - so the reader
+decides from the samples instead. Writing: output is premultiplied, because
+TouchDesigner's compositor evaluates `src + bg*(1-a)` and straight data draws
+every antialiased edge at full strength, making icons read blocky. Both
+directions fail silently: the file is valid, it decodes fine, and it renders
+wrong. `../docs/reverse-engineering.md` §5 has the derivation and the
+measurements; both directions are exercised against `sips` in the tests.
 
 Storage model
 -------------

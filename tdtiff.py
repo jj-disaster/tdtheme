@@ -372,20 +372,16 @@ def read_tiff(raw: bytes) -> TiffImage:
     extra = _first_ints(entries, TAG_EXTRA_SAMPLES, [EXTRA_SAMPLES_UNSPECIFIED])
     declared = extra[0] if extra else EXTRA_SAMPLES_UNSPECIFIED
 
-    # Decide the alpha convention from the DATA, not from the tag.
+    # Decide the alpha convention from the DATA, not from the tag. The tag is
+    # metadata about intent; the samples are the image, and for 23 of the 97
+    # shipped icons the two disagree. A single pixel with max(RGB) > alpha
+    # proves the tag is lying, since no channel can exceed alpha in genuinely
+    # premultiplied data - so the two populations separate with no threshold
+    # beyond "any". Trusting the tag instead is what turned those 23 icons'
+    # soft edges into solid white, destroying the antialiasing ramp entirely.
     #
-    # 23 of the 97 shipped icons declare ExtraSamples=1 (associated /
-    # premultiplied) but contain straight-alpha samples, and that is decidable
-    # rather than a matter of opinion: in genuine premultiplied data a channel
-    # can never exceed alpha, so a single pixel with max(RGB) > alpha proves
-    # the tag is lying. In Bypass.tiff, 98 of 102 partial-alpha pixels violate
-    # it. The 68 genuinely premultiplied icons violate it zero times, so the two
-    # populations are cleanly separated and no threshold is needed beyond "any".
-    #
-    # Trusting the tag here is what turned those 23 icons' soft edges into solid
-    # white: un-premultiplying (102,102,102,a=91) gives (255,255,255,91) after
-    # clamping, and the whole antialiasing ramp is destroyed. A tag is metadata
-    # about intent; the samples are the image.
+    # ../docs/reverse-engineering.md §5 has the derivation and the per-file
+    # pixel counts behind this.
     raw = data
     partial = 0
     violating = 0

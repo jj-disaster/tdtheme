@@ -7,9 +7,10 @@ does not need to create them. Generating an icon set from a recipe lives in
 `tdthememaker/`, the authoring tool in this repository, and nothing here writes a
 TIFF.
 
-The one thing that makes reading non-obvious is alpha. See "The alpha trap"
-below; in short, the `ExtraSamples` tag lies about 23 of the 97 shipped icons,
-and the reader has to decide from the samples instead.
+The one thing that makes reading non-obvious is alpha: the `ExtraSamples` tag
+lies about 23 of the 97 shipped icons, so the reader decides from the samples
+instead. `../docs/reverse-engineering.md` §5 is the canonical account; the
+codec in `../tdtiff.py` carries the reasoning next to the code that acts on it.
 
 What this module does
 ---------------------
