@@ -963,9 +963,9 @@ def validate_icons(name: str) -> "list[IconFinding]":
     if missing:
         findings.append(IconFinding(
             "warning", ICONS_DIRNAME,
-            f"this theme has {len(names)} of the baseline's {len(baseline_names)} "
-            f"icons. The other {len(missing)} are filled in from the baseline at "
-            f"apply time."))
+            f"this theme ships {len(names)} of the baseline's {len(baseline_names)} "
+            f"icons; the other {len(missing)} come from the baseline at apply "
+            f"time. The install ends up complete either way."))
     return findings
 
 
