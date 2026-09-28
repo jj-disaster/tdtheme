@@ -69,7 +69,7 @@ def section(title: str) -> None:
 PROJECT = HERE.parent
 RECIPES = PROJECT / "recipes"
 BASE = ROOT / "baseline" / "Icons"
-THEMES = ["default", "defaultnowarn", "midnight", "sunset", "mono", "bnw"]
+THEMES = ["default", "defaultnowarn", "midnight", "sunset", "mono", "bnw", "pink"]
 
 
 def theme_icons_dir(name: str) -> Path:

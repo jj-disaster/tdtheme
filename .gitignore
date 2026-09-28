@@ -12,3 +12,8 @@ backups/
 
 # macOS
 .DS_Store
+
+# JetBrains IDEs. These appear when a theme directory is opened as a project
+# root by accident - the .iml and vcs.xml are per-machine, and workspace.xml
+# holds local window state. Nothing here is source.
+.idea/
