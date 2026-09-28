@@ -170,10 +170,14 @@ These cost time. They are properties of the code, not opinions.
   theme *adds to* the baseline. It is not sufficient for "what did this apply
   change", because an overlay may add a key the baseline lacks and the next
   theme will drop it — a key that is absent from the comparison and therefore
-  invisible. `store_changes` wraps `diff` and adds the dropped keys, and the
-  `apply` summary line prints them as `N removed`. Do not build a
-  change-report on bare `diff` and conclude removals are impossible; they are
-  merely unreported.
+  invisible. `store_changes` wraps `diff` and adds the dropped keys, and
+  `apply` returns both halves as `result["changes"]` — **as data, not as
+  output**. Do not build a change-report on bare `diff` and conclude removals
+  are impossible; they are merely unreported. And note that `apply` deliberately
+  prints nothing about the two stores: a per-store "N setting(s) changed" line
+  was implemented and then removed, on the same reasoning as the missing
+  "backup: none" line. `tests/test_tdtheme.py` pins the absence, so putting it
+  back is a change to that check rather than an addition to `cli.py`.
 - **Implicit protocol calls defeat grep.** `len(x)` and `x in y` reach
   `__len__` and `__contains__` without either name appearing at the call site.
   `TdFile.__len__` and `TdFile.__contains__` look unused to a grep and are used

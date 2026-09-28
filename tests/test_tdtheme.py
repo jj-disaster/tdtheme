@@ -1119,26 +1119,21 @@ check(dropped[T.TOUCHCOLORS]["removed"] == ["zzcustom.thing"],
 check("zzcustom.thing" not in T.load_file(install / T.TOUCHCOLORS),
       "so the removal is visible in the report and not only in the bytes")
 
-# The line, and the cap on how many prefixes it names. The largest shipped theme
-# changes 460 keys, so a summary that listed them would be a listing nobody
-# reads; its overlay is copied rather than the whole theme, since the icons are
-# not what this is about.
-big = T.themes_dir / "bigkeys"
-big.mkdir(parents=True, exist_ok=True)
-(big / f"{T.TOUCHCOLORS}.yaml").write_bytes(
-    (PROJECT / "themes" / "mono" / f"{T.TOUCHCOLORS}.yaml").read_bytes())
-(big / f"{T.TOUCHOPTIONS}.yaml").write_text("")
-BIG_KEYS = len(T._load_theme("bigkeys")[T.TOUCHCOLORS])
-with contextlib.redirect_stdout(io.StringIO()) as big_output:
-    code = tdtheme_cli.main(["apply", "bigkeys"])
-big_lines = [ln.strip() for ln in big_output.getvalue().splitlines()
-             if T.TOUCHCOLORS in ln]
-check(code == 0 and big_lines and f"{BIG_KEYS} setting(s) changed" in big_lines[0],
-      f"the summary counts what a big theme changes ({big_lines})")
-check(any("more" in ln for ln in big_lines),
-      f"and says how many prefixes it did not name rather than listing them ({big_lines})")
-check("TouchOptions: unchanged" in big_output.getvalue(),
-      "a store this theme does not touch says so rather than printing a zero")
+# No output. `apply` reports the icons and the ui.tox, and deliberately says
+# nothing about the two stores: a line per store naming changed keys was tried
+# and removed, because "TouchOptions: unchanged" on every run is the same kind
+# of noise as a "backup: none" line. The per-key data is still on the result as
+# `changes`, for a caller that wants it - this just pins that the CLI does not
+# volunteer it.
+with contextlib.redirect_stdout(io.StringIO()) as quiet_output:
+    code = tdtheme_cli.main(["apply", "recolours"])
+printed = quiet_output.getvalue()
+check(code == 0, "apply still succeeds")
+check(not [ln for ln in printed.splitlines()
+           if T.TOUCHCOLORS in ln or T.TOUCHOPTIONS in ln],
+      f"and prints no line for either store ({printed!r})")
+check("setting(s) changed" not in printed and "unchanged" not in printed,
+      "specifically: neither the per-key count nor the store summary")
 
 # A store the install does not have cannot be compared against, and calling
 # every one of its keys a change would be a lie about a file that did not exist.
