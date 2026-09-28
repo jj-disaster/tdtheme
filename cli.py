@@ -169,6 +169,17 @@ def cmd_apply(args) -> int:
     return EXIT_OK
 
 
+def cmd_reset(args) -> int:
+    """`reset` is `apply default`, for when the theme name is not the point.
+
+    The name is fixed here and everything else is forwarded, so the two
+    commands cannot drift apart: there is one implementation, and the flags
+    on `reset` mean exactly what the same flags mean on `apply`.
+    """
+    args.name = "default"
+    return cmd_apply(args)
+
+
 def cmd_status(args) -> int:
     state = T.status()
     print(f"TouchDesigner     {state.td_version or 'not found'}")
@@ -363,6 +374,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-icons", action="store_true",
                    help="apply colours and options only, leaving the icon set alone")
     p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("reset", help="restore the stock look (an alias for 'apply default')")
+    p.add_argument("--force", action="store_true",
+                   help="write even if validation errors are present")
+    p.add_argument("--no-icons", action="store_true",
+                   help="reset colours and options only, leaving the icon set alone")
+    p.set_defaults(func=cmd_reset)
 
     icons = sub.add_parser("icons", help="inspect and rebuild icon sets")
     icons_sub = icons.add_subparsers(dest="icons_command", required=True)

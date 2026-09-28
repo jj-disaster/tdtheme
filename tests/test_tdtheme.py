@@ -913,6 +913,122 @@ check(final.drift[T.TOUCHCOLORS] == 1,
       "status still reports the intended difference from baseline")
 check(not [f for f in T.plan("e2e")["findings"]], "the e2e theme validates with no findings")
 
+# --------------------------------------------------------------------- reset
+#
+# `reset` is an alias for `apply default`, so what needs testing is the alias:
+# that it is wired up, that it names `default`, and that from the same starting
+# state it lands the same bytes as the long form. Re-testing `apply default` on
+# its own would be testing the wrong thing.
+#
+# The icons are the reason this section exists at all. `default` is empty
+# overlays plus a verbatim copy of the baseline icons, so most of what a reset
+# *does* is put the icons back - and this suite builds no icon directory, so
+# `icons_available()` is False for every check above and the icon half of apply
+# has never run in any test. A reset that quietly skipped the icons would leave
+# the install looking themed, and would have passed every check in this file.
+import contextlib
+import io
+
+import cli as tdtheme_cli
+
+# The real shipped reset theme, not a hand-rolled stand-in: `themes_dir` points
+# at tmp, and the point is that the theme that ships is the one that resets.
+shutil.copytree(PROJECT / "themes" / "default", T.themes_dir / "default")
+# A baseline icon set, so the "diff against baseline" optimisation inside
+# copy_icons has something to compare against.
+shutil.copytree(PROJECT / "baseline" / "Icons", T.baseline_dir / "Icons")
+shutil.copytree(T.baseline_dir / "Icons", install / "Icons")
+check(T.icons_available(),
+      "the icon half of apply is reachable in this suite, not silently skipped")
+
+BASELINE_ICON_COUNT = 97
+baseline_icons = T.baseline_dir / "Icons"
+install_icons = install / "Icons"
+DRIFTED_ICONS = ("ActivateOn.tiff", "BookmarkButton.tiff")
+
+
+def make_dirty() -> None:
+    """Put the install into a themed state: two icons and one colour off-baseline."""
+    (install / T.TOUCHCOLORS).write_bytes(
+        T.merge(colors_base, OrderedDict([("tile.connection.hilite1", THIRD_VALUE)])).to_bytes()
+    )
+    for name in DRIFTED_ICONS:
+        (install_icons / name).write_bytes(b"not the stock icon")
+
+
+def installed_state() -> dict:
+    """Everything a reset is supposed to control, as comparable bytes."""
+    state = {store: (install / store).read_bytes() for store in T.STORE_FILES}
+    state["icons"] = {p.name: p.read_bytes() for p in sorted(install_icons.glob("*.tiff"))}
+    return state
+
+
+STOCK = {store: (T.baseline_dir / store).read_bytes() for store in T.STORE_FILES}
+STOCK["icons"] = {p.name: p.read_bytes() for p in sorted(baseline_icons.glob("*.tiff"))}
+
+# The long form first, from a known-dirty state, so the alias has something to
+# be compared against rather than being checked against its own output.
+make_dirty()
+T.apply("default")
+long_form = installed_state()
+check(long_form == STOCK, "apply default returns the install to the baseline")
+
+# Now the same starting state through the alias, via the real argparse entry
+# point, so the wiring is exercised and not just the function body.
+make_dirty()
+with contextlib.redirect_stdout(io.StringIO()) as alias_output:
+    alias_code = tdtheme_cli.main(["reset"])
+aliased = installed_state()
+check(alias_code == 0, f"reset exits 0 (got {alias_code})")
+check(aliased == long_form, "reset and 'apply default' produce identical bytes")
+check(alias_output.getvalue().count("'default'") == 1,
+      "reset reports the theme it applied, so the alias is not hiding its target")
+
+check(aliased["icons"] == STOCK["icons"], "reset restores every icon to the baseline bytes")
+check(T.status().applied == "default",
+      f"reset records 'default' as the applied theme (got {T.status().applied})")
+
+# `only_changed_against` means untouched icons are not rewritten, so the counts
+# pin the mechanism from both sides: a reset from a dirty state rewrites
+# exactly the two icons that were drifted, and the next one has nothing to do.
+# (The alias reset above already left the install at the baseline, so this has
+# to re-dirty it - otherwise both runs below measure an install with no work
+# to do and the first check passes for the wrong reason.)
+make_dirty()
+first_reset = T.apply("default")
+check(sorted(first_reset["icons"]["written"]) == sorted(DRIFTED_ICONS)
+      and len(first_reset["icons"]["unchanged"]) == BASELINE_ICON_COUNT - len(DRIFTED_ICONS),
+      f"the first reset rewrites only the drifted icons "
+      f"({sorted(first_reset['icons']['written'])})")
+second_reset = T.apply("default")
+check(not second_reset["icons"]["written"]
+      and len(second_reset["icons"]["unchanged"]) == BASELINE_ICON_COUNT,
+      f"a second reset rewrites nothing "
+      f"({len(second_reset['icons']['written'])} written)")
+
+# A reset that is not backed up is a blind overwrite, and this is the command
+# people reach for when something has already gone wrong.
+make_dirty()
+result = T.apply("default")
+backups = sorted(T.backups_dir.glob("*/" + T.TOUCHCOLORS))
+check(bool(backups) and backups[-1].read_bytes()
+      == T.merge(colors_base, OrderedDict([("tile.connection.hilite1", THIRD_VALUE)])).to_bytes(),
+      "reset backs up the pre-reset stores rather than overwriting them")
+
+# Flags are forwarded to apply, which is the whole reason the alias holds the
+# name instead of duplicating the command.
+make_dirty()
+with contextlib.redirect_stdout(io.StringIO()):
+    code = tdtheme_cli.main(["reset", "--no-icons"])
+check(code == 0 and (install_icons / DRIFTED_ICONS[0]).read_bytes() == b"not the stock icon",
+      "reset --no-icons resets the stores and leaves the icons alone")
+check((install / T.TOUCHCOLORS).read_bytes() == STOCK[T.TOUCHCOLORS],
+      "reset --no-icons still returns the stores to the baseline")
+
+# Put the install back to stock for the wrapper section that follows.
+T.apply("default")
+check(installed_state() == STOCK, "the install is back at the baseline to end on")
+
 # --------------------------------------------------------------- the wrapper
 #
 # `tdtheme` is the entry point anyone actually types, and it is a shell script
@@ -961,6 +1077,13 @@ for name in ("absolute", "relative", "chained"):
 
 # And the real invocation: a bare name found on PATH, with nothing in the
 # command mentioning the repository at all.
+#
+# The link has to exist under the name the command answers to, *inside* this
+# temp dir. Without it the search falls through to whatever `tdtheme` the
+# machine happens to have installed - so the check passes on a developer box
+# that took the symlink step and fails on a clean checkout, which is the worst
+# order for a test to fail in.
+(links / "tdtheme").symlink_to("absolute")
 bare = run_wrapper(["tdtheme", "list"], away)
 check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
       f"`tdtheme` works as a bare command found on PATH "

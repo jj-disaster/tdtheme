@@ -8,7 +8,7 @@ every glyph - so you can build and switch themes instead of hand-editing them.
 ./tdtheme status
 ./tdtheme list
 ./tdtheme apply midnight
-./tdtheme apply default      # back to the stock look
+./tdtheme reset              # back to the stock look
 ```
 
 ## Running it from anywhere
@@ -78,6 +78,7 @@ Format details that matter, all verified rather than assumed:
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
 | `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set) |
+| `reset` | back to stock: an alias for `apply default`, same flags |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
 | `icons preview [NAME]` | write a PNG contact sheet so the icons can actually be looked at |
@@ -171,8 +172,8 @@ away. An unknown op, a misspelled argument, or an out-of-range colour is a hard
 error, because a silently skipped line means a subtly wrong icon set.
 
 `default` uses an **empty** `ops` list, which means *copy the baseline files
-byte for byte* rather than decode and re-encode. That is what makes
-`apply default` a lossless reset.
+byte for byte* rather than decode and re-encode. That is what makes a reset
+lossless.
 
 ```
 ./tdtheme icons diff mono           # by pixel - which icons are actually repainted

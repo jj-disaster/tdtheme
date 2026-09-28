@@ -1060,11 +1060,13 @@ links = tmp / "links"
 links.mkdir(parents=True, exist_ok=True)
 
 
-def run_wrapper(argv, cwd, path_prefix=()):
+def run_wrapper(argv, cwd, path_prefix=(), env_overrides=None):
     env = dict(os.environ)
     if path_prefix:
         env["PATH"] = os.pathsep.join(
             [str(p) for p in path_prefix] + [env.get("PATH", "")])
+    if env_overrides:
+        env.update(env_overrides)
     return subprocess.run(argv, capture_output=True, text=True, cwd=cwd, env=env)
 
 
@@ -1092,6 +1094,11 @@ for name in ("absolute", "relative", "chained"):
           f"the wrapper resolves a {name} symlink to itself "
           f"(exit {result.returncode}: {tail(result, 60)})")
 
+# The link has to exist under the name the command answers to, inside this temp
+# dir. Without it the lookup falls through to whatever `tdthememaker` the
+# machine has installed, so the check passes on a box that took the symlink
+# step and fails on a clean checkout.
+(links / "tdthememaker").symlink_to("absolute")
 bare = run_wrapper(["tdthememaker", "list"], away, path_prefix=[links])
 check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
       f"`tdthememaker` works as a bare command found on PATH "
@@ -1113,10 +1120,26 @@ check(not (ROOT / "sheet.png").exists(),
 
 # A pre-existing PYTHONPATH must survive: prepending is right, replacing would
 # silently break whatever the caller had set up.
-kept = run_wrapper([str(WRAPPER), "list"], away)
-check(kept.returncode == 0,
-      f"the wrapper runs with the caller's environment intact "
-      f"(exit {kept.returncode})")
+#
+# `sitecustomize` is the probe. Python imports it at startup from sys.path, so a
+# marker file it writes is positive evidence that the caller's entry was still
+# on the path in the child. Checking only that the wrapper exits 0 would pass
+# just as well with PYTHONPATH clobbered, because the repo root is all this
+# command needs - that was the previous version of this check, and it could not
+# have failed. The override also drops the inherited value, so the child's path
+# is exactly the wrapper's addition plus the one entry set here.
+sentinel_path = tmp / "sentinel-path"
+sentinel_path.mkdir(parents=True, exist_ok=True)
+sentinel_marker = tmp / "sentinel-loaded"
+(sentinel_path / "sitecustomize.py").write_text(
+    "from pathlib import Path\n"
+    f"Path({str(sentinel_marker)!r}).touch()\n"
+)
+kept = run_wrapper([str(WRAPPER), "list"], away,
+                   env_overrides={"PYTHONPATH": str(sentinel_path)})
+check(kept.returncode == 0 and sentinel_marker.exists(),
+      f"the wrapper preserves a pre-existing PYTHONPATH "
+      f"(exit {kept.returncode}: {tail(kept)})")
 
 shutil.rmtree(tmp, ignore_errors=True)
 
