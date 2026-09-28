@@ -75,10 +75,18 @@ files it duplicated, so it protected against a wrong `apply` and nothing else.
 committed.
 
 `result["backup"]` is `None` when the flag is absent, and `tdtheme apply` prints
-a line saying so plus what to do instead. That line is load-bearing: a missing
-line reads as "no backup was needed", which is the opposite of the reason the
-default is off. `tests/test_tdtheme.py` pins both the `None` and the absence of
-any new set under `backups/`.
+**nothing about backups at all** in that case. It used to print
+`backup: none (...)` plus the recovery command, on the reasoning that silence
+reads as "no backup was needed". That was a deliberate change of mind: the
+flag is in the command's own `--help`, the recovery path is "re-apply", and
+`tdtheme status` names the theme to re-apply, so a line on every run to
+announce that nothing happened is noise. Do not add it back as a "helpful"
+fix; the check that pins the absence is in `tests/test_tdtheme.py`, and
+reversing this is a change to that check, not an addition to `cli.py`.
+
+The line still prints when `--backup` is given, and it names the set it wrote.
+`tests/test_tdtheme.py` pins the `None`, the absence of any new set under
+`backups/`, and both halves of the output.
 
 ## Other things that are settled
 

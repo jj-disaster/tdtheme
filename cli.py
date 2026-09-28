@@ -180,12 +180,6 @@ def cmd_apply(args) -> int:
         _finding_lines(errors)
     if result["backup"] is not None:
         print(f"\n    backup: {result['backup']}")
-    else:
-        # Say what happened and what to do instead, rather than printing
-        # nothing. A missing line here reads as "no backup was needed", and
-        # the whole point of making this opt-in is that the substitute exists.
-        print("\n    backup: none (every applied theme is in git, so "
-              "`tdtheme apply <the previous one>` puts this back)")
     if not result["td_running"]:
         print("    TouchDesigner is closed; changes are live on next launch.")
     return EXIT_OK

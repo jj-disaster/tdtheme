@@ -1038,18 +1038,24 @@ check(code == 0 and (install_icons / DRIFTED_ICONS[0]).read_bytes() == b"not the
 check((install / T.TOUCHCOLORS).read_bytes() == STOCK[T.TOUCHCOLORS],
       "reset --no-icons still returns the stores to the baseline")
 
-# The line itself, in both directions. This is the only thing telling a user
-# that no copy was kept, and a line that quietly disappeared would read as
-# "none was needed" - the opposite of why the default is off. So pin the
-# wording's two halves: that it says none, and that it names the way back.
+# The output line, in both directions. Pinned as an *absence*, which is the
+# part worth pinning: an earlier version printed "backup: none (...)" on every
+# apply, on the argument that silence would read as "no backup was needed".
+# That was a deliberate change of mind, not an oversight - `--backup` is
+# documented in the command's own help, the recovery path is "re-apply", and
+# `status` names the theme to re-apply. So a line on every run to say that
+# nothing happened is noise. Pin it so a well-meaning reader does not add it
+# back, and so that if the decision is ever revisited it is a deliberate change
+# to this check rather than a quiet insertion.
 make_dirty()
 with contextlib.redirect_stdout(io.StringIO()) as no_backup_output:
     code = tdtheme_cli.main(["reset"])
 check(code == 0, "reset without --backup succeeds")
-check("backup: none" in no_backup_output.getvalue(),
-      "the output says no backup was taken, rather than staying silent about it")
-check("tdtheme apply" in no_backup_output.getvalue(),
-      "and it names the way back, so the default does not read as a missing safety net")
+# Matched on the label, not on the bare word: the icons summary says "N backed
+# up" when there is something to say, and that is a different thing entirely.
+check(not [ln for ln in no_backup_output.getvalue().splitlines()
+           if "backup:" in ln.lower()],
+      f"and prints no backup line at all ({no_backup_output.getvalue()!r})")
 
 make_dirty()
 with contextlib.redirect_stdout(io.StringIO()) as backup_output:
@@ -1057,8 +1063,8 @@ with contextlib.redirect_stdout(io.StringIO()) as backup_output:
 reported = [ln for ln in backup_output.getvalue().splitlines() if "backup:" in ln]
 check(code == 0 and reported and str(T.backups_dir) in reported[0],
       f"with --backup the output names the set it wrote ({reported})")
-check("backup: none" not in backup_output.getvalue(),
-      "and does not also claim none was taken")
+check("none" not in reported[0].lower(),
+      "and names it as what it is, not as an absence")
 
 # Put the install back to stock for the wrapper section that follows.
 T.apply("default")
