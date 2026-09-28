@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 
+# PNG contact sheets, rewritten by every `icons preview` run
+testiconsforagents/
+
 # Backups are copies of a live TouchDesigner install, created on every apply
 backups/
 
