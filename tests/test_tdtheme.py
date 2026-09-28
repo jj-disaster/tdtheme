@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections import OrderedDict
@@ -911,6 +912,59 @@ check(final.applied == "e2e", f"status records the last applied theme (got {fina
 check(final.drift[T.TOUCHCOLORS] == 1,
       "status still reports the intended difference from baseline")
 check(not [f for f in T.plan("e2e")["findings"]], "the e2e theme validates with no findings")
+
+# --------------------------------------------------------------- the wrapper
+#
+# `tdtheme` is the entry point anyone actually types, and it is a shell script
+# that has to locate its own cli.py. It gets onto PATH as a symlink, so
+# `dirname $0` is the directory holding the *link*, not the repository - the
+# wrapper has to follow the chain itself. Nothing else in this suite would
+# notice if it stopped: every other check here imports the library directly, and
+# the failure mode is a "can't open file" from a foreign working directory.
+WRAPPER = PROJECT / "tdtheme"
+check(WRAPPER.is_file() and os.access(WRAPPER, os.X_OK),
+      "the ./tdtheme wrapper exists and is executable")
+
+away = tmp / "elsewhere"
+away.mkdir(parents=True, exist_ok=True)
+links = tmp / "links"
+links.mkdir(parents=True, exist_ok=True)
+
+
+def run_wrapper(argv, cwd):
+    return subprocess.run(argv, capture_output=True, text=True, cwd=cwd,
+                          env={**os.environ, "PATH": f"{links}{os.pathsep}"
+                               + os.environ.get("PATH", "")})
+
+
+direct = run_wrapper([str(WRAPPER), "list"], away)
+check(direct.returncode == 0 and "defaultnowarn" in direct.stdout,
+      f"the wrapper runs from an unrelated directory and finds cli.py "
+      f"(exit {direct.returncode}: {direct.stderr.strip()[:70]})")
+
+# The three link shapes the resolution loop has to handle: absolute, relative to
+# the link's own directory, and a link pointing at another link.
+#
+# The relative path is computed between *realpaths*, and it has to be. This
+# suite's temp dir is reached through /var -> /private/var, so relpath between
+# the logical paths yields one `..` too few and the link dangles - a broken test
+# that looks like a broken wrapper. Same trap as any other symlinked ancestor.
+(links / "absolute").symlink_to(WRAPPER)
+(links / "relative").symlink_to(
+    os.path.relpath(os.path.realpath(WRAPPER), os.path.realpath(links)))
+(links / "chained").symlink_to("absolute")
+for name in ("absolute", "relative", "chained"):
+    result = run_wrapper([str(links / name), "list"], away)
+    check(result.returncode == 0,
+          f"the wrapper resolves a {name} symlink to itself "
+          f"(exit {result.returncode}: {result.stderr.strip()[:60]})")
+
+# And the real invocation: a bare name found on PATH, with nothing in the
+# command mentioning the repository at all.
+bare = run_wrapper(["tdtheme", "list"], away)
+check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
+      f"`tdtheme` works as a bare command found on PATH "
+      f"(exit {bare.returncode}: {bare.stderr.strip()[:70]})")
 
 # ---------------------------------------------------------------- cleanup
 

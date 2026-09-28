@@ -11,6 +11,27 @@ every glyph - so you can build and switch themes instead of hand-editing them.
 ./tdtheme apply default      # back to the stock look
 ```
 
+## Running it from anywhere
+
+The wrapper resolves its own location, so it does not care what the working
+directory is - `tdtheme status` behaves identically from `$HOME` or `/`. To drop
+the `./`, put it on `PATH` with a symlink:
+
+```sh
+ln -s "$PWD/tdtheme" /opt/homebrew/bin/tdtheme
+```
+
+A symlink is the right mechanism here rather than installing a copy. `tdtheme`
+has no dependencies to resolve, and it reads `themes/` and `baseline/` from the
+repository it lives in, so a symlink keeps one copy of your theme data and makes
+the command always reflect the current checkout. An installed copy would be a
+second, silently-drifting copy of the same themes - and `apply` would install
+from whichever one it found.
+
+`check-td-writes` can be symlinked the same way if you want it on `PATH` too.
+`tdthememaker` has no wrapper; it is run as `python3 -m tdthememaker.cli`, which
+needs the repository root as the working directory.
+
 ## What it actually edits
 
 Two files and one directory inside the app bundle:

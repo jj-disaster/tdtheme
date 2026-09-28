@@ -1,4 +1,19 @@
 #!/bin/sh
-# Convenience wrapper so the tool can be run as ./tdtheme <command>
-# without worrying about the interpreter or the working directory.
-exec python3 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/cli.py" "$@"
+# Convenience wrapper so the tool can be run as `tdtheme <command>` from any
+# directory, without worrying about the interpreter or the working directory.
+#
+# Resolving $0 is not enough on its own: this script is meant to be symlinked
+# onto PATH, and then $0 is the symlink, not this file. `dirname $0` would
+# point at the directory holding the link, where cli.py does not exist. So
+# follow the chain to the real file first. macOS has no `readlink -f`, hence
+# the loop.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname -- "$target")/$link ;;
+    esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
+exec python3 "$here/cli.py" "$@"
