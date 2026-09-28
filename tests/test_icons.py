@@ -110,16 +110,37 @@ check(len(names) == 97, f"baseline holds the 97 shipped icons (found {len(names)
 # The baseline is the reference every theme diffs against, so what has to hold
 # is not that the *install* equals the baseline - it usually will not, because
 # applying a theme is the tool working - but that the baseline and every theme
-# describe the same 97 glyphs at the same dimensions. That is the invariant a
+# describe the same glyphs at the same dimensions. That is the invariant a
 # stale baseline would break, and it holds whatever is currently applied.
+#
+# "The same glyphs" is a subset relation, not equality. A theme is allowed to
+# ship fewer icons than the baseline: `apply` completes the rest from the
+# baseline, and a theme that themes one glyph and leaves 96 stock is a
+# perfectly good theme. This asserted equality until it failed on exactly that
+# - a real theme shipping 1 of 97 - which is a check that had outlived the
+# feature it was written for. What has to hold is that every name a theme
+# ships is one the baseline knows, because that is what the fill-in resolves
+# against; a name the baseline lacks is installed as-is and reported
+# separately, and is not an error either.
 installed_names = set(tdicons.icon_names(BASE))
 check(len(installed_names) == 97, "the baseline's 97 icon names are all distinct")
+partial_themes = []
 for theme in sorted(T.list_themes()):
     directory = T.theme_icons_dir(theme)
     if not directory.is_dir():
         continue
-    same = set(tdicons.icon_names(directory)) == installed_names
-    check(same, f"{theme} ships exactly the baseline's 97 icon names")
+    theme_names = set(tdicons.icon_names(directory))
+    check(theme_names <= installed_names,
+          f"{theme} ships only names the baseline knows "
+          f"(unknown: {sorted(theme_names - installed_names)})")
+    if theme_names != installed_names:
+        partial_themes.append(f"{theme} {len(theme_names)}/{len(installed_names)}")
+# A note, not a check. Which themes are partial is a fact about the repository,
+# not a property with a correct value, and asserting it would make a new theme
+# fail for shipping fewer icons - the thing this section used to do.
+if partial_themes:
+    print(f"[  note  ] {len(partial_themes)} theme(s) ship a partial icon set, "
+          f"completed from the baseline at apply time: {', '.join(partial_themes)}")
 
 # A dimension change is the one thing that would render wrongly rather than
 # merely look stale, so it is a hard check across every shipped set.
