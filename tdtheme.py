@@ -1051,11 +1051,12 @@ def _apply_ui_tox(name: str) -> dict:
     """Install a theme's `ui.tox`, or `default`'s, over the one in the install.
 
     No backup, and that is a deliberate departure from the two stores and the
-    icon set. `ui.tox` is 1.1 MB and TouchDesigner rewrites it whenever the
-    layout changes, so a backup taken at apply time is a copy of whatever the
-    last session left behind rather than anything worth having - and at one per
-    apply it would multiply out to hundreds of megabytes of a file that the
-    stock copy in `themes/default/` already accounts for.
+    icon set. `ui.tox` is 1.1 MB and the only thing that ever writes it is
+    `apply` itself - TouchDesigner reads it and never writes it, and a manual
+    export lands wherever the user saved it rather than over the install's copy.
+    So a backup taken at apply time is the outgoing theme's file, which is
+    already in git in that theme's own folder, and at one per apply it would
+    multiply out to hundreds of megabytes of bytes this repository already has.
 
     The write goes through `write_file`, so it is atomic and creates
     `Config/System/` if it is somehow absent. Overwriting unconditionally is

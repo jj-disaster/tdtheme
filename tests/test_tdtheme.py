@@ -1100,7 +1100,7 @@ check(install_tox.read_bytes() == default_tox.read_bytes(),
 
 # No backup, on purpose - see _apply_ui_tox. Pinned because a later reader would
 # otherwise read the omission as an oversight and "fix" it into 1.1 MB per
-# apply.
+# apply, when the outgoing file is already in git in its own theme's folder.
 check(not list(T.backups_dir.glob(f"*/{T.UI_TOX}"))
       and not list(T.backups_dir.glob(f"*/{T.SYSTEM_DIRNAME}/{T.UI_TOX}")),
       "apply does not back up ui.tox, unlike the stores and the icon set")
