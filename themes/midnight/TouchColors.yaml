@@ -1,16 +1,3 @@
-# tdtheme sparse overlay - only keys that differ from baseline.
-# file: TouchColors
-#
-# "midnight" - a cooler, deeper network editor with brighter wiring so
-# connections read more clearly against the background.
-#
-# Only the keys listed here are changed. Everything else falls through to
-# the captured baseline, so this stays small and survives TouchDesigner
-# updates that add new colour keys.
-#
-#   tdtheme apply midnight      # switch to it
-#   tdtheme apply default       # back to the stock look
-
 # --- network editor background -------------------------------------------
 worksheet.bg: ["0.05", "0.055", "0.075"]
 worksheet.grid: ["0.12", "0.13", "0.18"]
