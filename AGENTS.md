@@ -62,6 +62,37 @@ probes are what actually catch it. Keep both kinds.
 - **`docs/icon-storage-design.md` is an unimplemented proposal**, deliberately.
   It is not a description of current behaviour. Do not "fix" code to match it.
 
+## `ui.tox` is a copy, and the three decisions around it are settled
+
+`Config/System/ui.tox` holds the UI layout — dialog and window geometry, open
+panes, column widths. It is a `.tox`, TouchDesigner's own binary project format,
+so **no value in it can be edited by this tool**; the only thing that can be
+done is shipping a whole file and copying it over the top. A theme may carry
+`themes/<name>/ui.tox`, and `apply` writes it.
+
+Three choices here look like omissions and are not. Do not "fix" them.
+
+- **It is not backed up**, unlike the two stores and the icon set. It is 1.1 MB
+  and TouchDesigner rewrites it on any layout change, so an apply-time copy is a
+  snapshot of the last session, at one copy per apply. `tests/test_tdtheme.py`
+  pins the absence, because it reads as an oversight.
+- **A theme with no `ui.tox` falls back to `default`'s**, rather than writing
+  nothing. Writing nothing leaves the *previous* theme's dialogs in place while
+  `list` reports the new theme, which is the leak `default` prevents. The
+  fallback is a total-overwrite property, same as the icon sets.
+- **Nothing validates it.** There is no parser and no way to ask TouchDesigner
+  whether it liked the bytes, so a check could only confirm the copy landed,
+  which `write_file` already does. `apply` reports which file it wrote and
+  stops there.
+
+`--no-icons` does **not** skip it; that flag is about the icon set.
+
+A `.tox` is written *by TouchDesigner* — a project file, saved as state. So
+`apply` may need re-running after a session that changed the layout, and unlike
+the stores and the icons, `ui.tox` is absent from `check-td-writes` on purpose.
+A hand-arranged UI is the one thing here that is **not** recoverable: it exists
+only where the user put it. Copy it into a theme folder, not into `backups/`.
+
 ## Traps in this codebase
 
 These cost time. They are properties of the code, not opinions.

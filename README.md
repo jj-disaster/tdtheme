@@ -42,17 +42,20 @@ it, so a relative path you pass means what you meant.
 
 ## What it actually edits
 
-Two files and one directory inside the app bundle:
+Two files, one directory and a third file, inside the app bundle:
 
 | Path | Shape | Controls |
 |---|---|---|
 | `TouchColors` | `key <TAB> r <TAB> g <TAB> b` | every UI colour, incl. all network-editor keys |
 | `TouchOptions` | `key <TAB> value` | numeric UI options - sizing, spacing, alpha |
 | `Icons/*.tiff` | classic TIFF, 8-bit RGB(A) | the 97 UI glyphs: flags, badges, overlays |
+| `System/ui.tox` | TouchDesigner's own `.tox` | the UI itself: dialog and window geometry, layout |
 
 The two stores are read at startup. The icons are not - they are read **lazily
 on first use and then cached for the life of the process**, so an icon change
-needs a restart even to be looked at. See [Icons](#icons).
+needs a restart even to be looked at. See [Icons](#icons). `ui.tox` is a
+different case again: it cannot be edited at all, only installed whole. See
+[ui.tox](#uitox).
 
 Format details that matter, all verified rather than assumed:
 
@@ -77,7 +80,7 @@ Format details that matter, all verified rather than assumed:
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
-| `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set) |
+| `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
@@ -254,6 +257,63 @@ converting generated files with `sips` - an independent decoder - requiring a
 **max channel difference of 0** at full opacity, and adding a counterfactual
 that forges a mislabeled file to prove the check can fail.
 
+## ui.tox
+
+Everything about the UI that is not a colour, a number or a glyph lives in one
+more file: `Config/System/ui.tox`. Dialog and window sizes, which panes are
+open, column widths - the layout itself.
+
+It is also a `.tox`, which is TouchDesigner's own binary project format, and
+that is the whole difficulty. **A `.tox` can only be written by TouchDesigner.**
+No editor in this repository can change a value inside one, and neither can
+this tool. The way to get a different UI is to arrange it by hand in the app
+and save, which is a person doing it, not a script.
+
+What a script *can* do is the part that was missing: the file is still a file.
+So a theme ships a `ui.tox`, and `apply` copies it over the top of the one in
+the bundle. There is no format to parse, no merge, no diff and no validation,
+because there is nothing to validate - the bytes either arrive or they do not,
+and `write_file` already settles that. `apply` reports which file it wrote.
+
+```
+themes/<name>/ui.tox        ->  Config/System/ui.tox
+```
+
+To make one, rearrange the UI in TouchDesigner, save, and copy
+`Config/System/ui.tox` into a theme directory. `themes/default/ui.tox` is the
+stock file, taken from a fresh install.
+
+**A theme with no `ui.tox` of its own gets `default`'s**, which is the detail
+that makes this safe rather than merely convenient. The alternative - writing
+nothing - means applying a theme that has no opinion about the UI leaves the
+*previous* theme's dialogs on screen while `tdtheme list` reports the new one,
+and nothing about that looks wrong. Falling back means a theme switch is a
+total overwrite, the same property the icon sets have and for the same reason.
+
+Three consequences worth knowing:
+
+- **It is not backed up.** Unlike the two stores and the icon set, `apply`
+  leaves no copy of the outgoing `ui.tox` in `backups/`. It is 1.1 MB,
+  TouchDesigner rewrites it whenever the layout changes, so a copy taken at
+  apply time is a snapshot of the last session rather than anything worth
+  keeping - and at one per apply it would grow `backups/` by hundreds of
+  megabytes. The stock file is recoverable from `themes/default/ui.tox` and
+  from `baseline/System/ui.tox`. **A hand-arranged UI is not**, so keep it in a
+  theme folder, which is where it came from.
+- **`--no-icons` does not skip it.** That flag is about the icon set. A theme
+  switch that skipped the UI would leave the previous theme's geometry in place
+  while reporting the new theme, which is the exact failure the fallback above
+  exists to prevent.
+- **`capture` keeps a copy**, verbatim, at `baseline/System/ui.tox`, mirroring
+  the install's layout. Nothing reads it - the fallback is the theme, not the
+  baseline - but it means `capture` does not quietly lose the file, and a
+  hand-edited `ui.tox` in the install is distinguishable from the shipped one
+  by hash.
+
+`tests/test_tdtheme.py` covers the resolution rules and the no-leak property.
+It asserts nothing about the contents, because nothing can be asserted about
+1.1 MB of opaque bytes.
+
 ## Validation
 
 `apply` refuses to write on a validation error, and warns on anything
@@ -290,16 +350,19 @@ suspicious.
 
 ## Things that will bite you
 
-- **Restart TouchDesigner to see a change.** It reads all three at startup, so a
-  running instance keeps showing the old appearance until you restart. That is a
+- **Restart TouchDesigner to see a change.** It reads the stores and the
+  `ui.tox` at startup, so a running instance keeps showing the old appearance
+ until you restart. That is a
   display lag, not data loss — the files themselves are safe to edit while
   TouchDesigner is running. `apply` says so when it detects a running process.
   Icons are additionally cached lazily on first use, so they are not re-read
   even for a window that opens later in the session.
-- **A TouchDesigner update wipes all three.** `status` compares the live build
+- **A TouchDesigner update wipes all of it.** `status` compares the live build
   against the one recorded in the baseline and warns on a mismatch;
   `capture --force` refreshes it. A new build may also ship new or resized
-  icons, which `validate_icons` reports per theme.
+  icons, which `validate_icons` reports per theme, and it will almost certainly
+  ship a new `ui.tox` - after an update, re-copy the stock file into
+  `themes/default/` or every theme inherits the new build's layout.
 - **The app bundle's code signature was already invalid** before this tool
   existed (a sealed resource is missing in `Python.framework`). Editing
   files inside the bundle does not make that worse, but it is why macOS
@@ -365,11 +428,17 @@ update to confirm this still holds for that build.
   it needs a probe-and-restart experiment.
 - **Key deletion is not supported** in v1. A key with no value is rejected
   with a message saying so.
-- Themes cover `TouchColors`, `TouchOptions` and `Icons`. Three other colour
-  systems exist in the same directory and are untouched:
+- Themes cover `TouchColors`, `TouchOptions`, `Icons` and `System/ui.tox`. Three
+  other colour systems exist in the same directory and are untouched:
   `colorPalette.def` / `opColorPalette.def` (Palette browser wheels) and
   `3DSceneColors` / `MiscColors` (3D viewport and lock/keyframe colours).
   Each would be one more parser behind the same interface.
+- **`ui.tox` is installed whole and never inspected.** There is no way to tell
+  from outside TouchDesigner whether a given `ui.tox` is one it will accept, so
+  a wrong one shows up as a wrong-looking UI after a restart and nothing else.
+  The 26 other `.tox` files in `Config/System` (the per-dialog ones, `keymanager`,
+  `menu_op`, `maps`, `midi`) are **not** themed, and could not be by the same
+  mechanism without one copy per theme per file - the copy is 1.1 MB each.
 - The other icon-named directories in the install are **not** themed:
   `Config/IconsApp` (`toe.ico`, `tox.ico`, the dock and file-type icons),
   `Samples/Map/Icons`, `Samples/ProjectPackager/Icons`, and IDLE's
@@ -385,8 +454,10 @@ cli.py                  argument parsing and output
 tdtheme                 shell wrapper
 check-td-writes         settles whether TouchDesigner writes these files
 docs/                   background reading; see Documentation below
-baseline/               captured pristine files + Icons/ + version.json
-themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full set)
+baseline/               captured pristine files + Icons/ + System/ui.tox
+                        + version.json
+themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full
+                        set), and optionally ui.tox
 backups/<timestamp>/    automatic, before every apply
 testiconsforagents/     PNG contact sheets written by `icons preview`
 tests/                  round-trip gate + library tests + icon tests
@@ -462,6 +533,15 @@ changed. `tdtheme` assumes TouchDesigner never writes these files and does not
 warn about data loss. That assumption was measured, not guessed - but it is
 per-build, so re-run this after a TouchDesigner update. The tool itself
 re-checks the baseline build number on every `status`.
+
+**`ui.tox` is not among them, and that omission is deliberate rather than an
+oversight.** A `.tox` is TouchDesigner's own format, so unlike the two stores
+this file is written *by TouchDesigner* — a `.tox` is a project file, and the UI
+layout is state it saves. Expect `apply` to need re-running after a session in
+which the layout changed, and treat a theme's `ui.tox` as the layout you want
+at launch rather than something that survives editing. Adding it to
+`check-td-writes` would turn that expectation into a measurement, and is the
+obvious next step if it turns out to matter.
 
 The tool has **no third-party dependencies**. It uses PyYAML when
 importable (TouchDesigner bundles 6.0.3) and otherwise falls back to a

@@ -45,6 +45,7 @@ __all__ = [
     "load_overlay",
     "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
     "icons_dir", "baseline_icons_dir", "theme_icons_dir",
+    "ui_tox_path", "baseline_ui_tox", "theme_ui_tox", "ui_tox_source",
     "td_version", "td_running",
     "list_themes", "require_theme", "theme_path",
     "capture", "apply", "status", "plan",
@@ -96,6 +97,31 @@ COLOR_FILES = frozenset({TOUCHCOLORS})
 #: `ICO_Manager::loadIcon` call site that build `<ConfigDir>/Icons/<Name>.tiff`.
 ICONS_DIRNAME = "Icons"
 
+#: The subdirectory of the config tree that holds the UI layout file.
+SYSTEM_DIRNAME = "System"
+
+#: Everything about the UI that is not a colour or an option - dialog and window
+#: geometry, column widths, which panes are open - lives in this one file, and
+#: it is a `.tox`: TouchDesigner's own binary project format, which only
+#: TouchDesigner can write. So a UI change cannot be made by editing a value the
+#: way the other two stores can. It can still be *installed*, because the file is
+#: just a file: a theme ships one and `apply` copies it over the top.
+#:
+#: Nothing here parses it, decodes it, or checks that the write worked. It is
+#: 1.1 MB of opaque bytes and there is no way to tell from the outside whether
+#: TouchDesigner liked them, so a check here could only report that bytes
+#: arrived - which is what `write_file` already guarantees. The one thing worth
+#: getting right is *which* file gets written, since two themes silently sharing
+#: one is the failure nobody would notice.
+UI_TOX = "ui.tox"
+
+#: The theme whose `ui.tox` is the fallback for every other theme. Fixed rather
+#: than "first alphabetically", because `apply` on a theme that ships no UI file
+#: has to mean the stock UI specifically - that is what makes a total overwrite
+#: safe, and it is why applying a theme can never leave the previous theme's
+#: dialogs behind.
+DEFAULT_THEME = "default"
+
 root = Path(__file__).resolve().parent
 baseline_dir = root / "baseline"
 themes_dir = root / "themes"
@@ -122,6 +148,40 @@ def baseline_icons_dir() -> Path:
 
 def theme_icons_dir(name: str) -> Path:
     return themes_dir / name / ICONS_DIRNAME
+
+
+def ui_tox_path() -> Path:
+    """The `ui.tox` in the live install."""
+    return config_dir() / SYSTEM_DIRNAME / UI_TOX
+
+
+def baseline_ui_tox() -> Path:
+    return baseline_dir / SYSTEM_DIRNAME / UI_TOX
+
+
+def theme_ui_tox(name: str) -> Path:
+    return themes_dir / name / UI_TOX
+
+
+def ui_tox_source(name: str) -> "Path | None":
+    """The `ui.tox` a theme installs, or None when there is nothing to install.
+
+    A theme that ships no `ui.tox` of its own falls back to `default`'s, which
+    is the pristine one. The fallback is the whole point rather than a
+    convenience: a theme leaves the install holding the *previous* theme's
+    dialogs if nothing is written, and then `tdtheme list` reports a theme that
+    is not what is on screen. Falling back means "this theme has no opinion
+    about the UI" resolves to the stock UI, so a switch can never leak.
+
+    A theme that does ship one always wins over the fallback, including
+    `default` itself, whose file is a copy of the stock install rather than a
+    reference back to the baseline.
+    """
+    own = theme_ui_tox(name)
+    if own.is_file():
+        return own
+    fallback = theme_ui_tox(DEFAULT_THEME)
+    return fallback if fallback.is_file() else None
 
 
 # --------------------------------------------------------------------------
@@ -693,12 +753,16 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     # Otherwise the refusal reads "baseline already exists (TouchColors,
     # TouchOptions)" and implies the 97 icons are not at stake, when
     # re-capturing replaces all of them and every theme's `icons diff` is
-    # computed against the result.
+    # computed against the result. `ui.tox` is in the same position: re-capturing
+    # replaces it, and it is what `capture` copies out to the baseline.
     icons_present = baseline_icons_dir().is_dir()
-    if (existing or icons_present) and not force:
+    ui_tox_present = baseline_ui_tox().is_file()
+    if (existing or icons_present or ui_tox_present) and not force:
         held = list(existing)
         if icons_present:
             held.append(ICONS_DIRNAME)
+        if ui_tox_present:
+            held.append(f"{SYSTEM_DIRNAME}/{UI_TOX}")
         raise ThemeError(
             f"baseline already exists ({', '.join(held)}). Re-capturing changes "
             f"what every existing theme diffs against. Use --force if that is intended."
@@ -727,6 +791,18 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     if icons_dir().is_dir():
         written.update(tdicons.capture_icons(icons_dir(), baseline_icons_dir()))
 
+    # Verbatim, like the icons: the point of the baseline copy is to be the file
+    # TouchDesigner shipped, so a hand-edited ui.tox in the install is captured
+    # as-is and is distinguishable from it by hash. Nothing reads this copy - the
+    # fallback for a theme without a ui.tox is `themes/default/ui.tox`, not the
+    # baseline, because the baseline is a reference rather than something to
+    # install. It exists so `capture` does not quietly lose the file and so a
+    # reinstall can be compared against it.
+    if ui_tox_path().is_file():
+        baseline_ui_tox().parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ui_tox_path(), baseline_ui_tox())
+        written[UI_TOX] = baseline_ui_tox()
+
     write_file(_version_path(), json.dumps({
         "td_build": td_version(),
         "captured": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -742,8 +818,13 @@ def theme_path(name: str, store: str) -> Path:
 def list_themes() -> "list[str]":
     if not themes_dir.exists():
         return []
+    # A theme is a directory that ships at least one thing this tool installs.
+    # `ui.tox` counts: a theme that themes nothing but the UI is a legitimate
+    # thing to want, and a directory holding only one would otherwise be
+    # invisible to `list`, `diff` and `require_theme` alike.
     return sorted(p.name for p in themes_dir.iterdir()
-                  if p.is_dir() and (any(p.glob("*.yaml")) or (p / ICONS_DIRNAME).is_dir()))
+                  if p.is_dir() and (any(p.glob("*.yaml")) or (p / ICONS_DIRNAME).is_dir()
+                                     or (p / UI_TOX).is_file()))
 
 
 def require_theme(name: str) -> None:
@@ -950,6 +1031,29 @@ def _apply_icon_set(name: str, backup_dir: Path) -> dict:
     return result
 
 
+def _apply_ui_tox(name: str) -> dict:
+    """Install a theme's `ui.tox`, or `default`'s, over the one in the install.
+
+    No backup, and that is a deliberate departure from the two stores and the
+    icon set. `ui.tox` is 1.1 MB and TouchDesigner rewrites it whenever the
+    layout changes, so a backup taken at apply time is a copy of whatever the
+    last session left behind rather than anything worth having - and at one per
+    apply it would multiply out to hundreds of megabytes of a file that the
+    stock copy in `themes/default/` already accounts for.
+
+    The write goes through `write_file`, so it is atomic and creates
+    `Config/System/` if it is somehow absent. Overwriting unconditionally is
+    the whole design: the previous theme's UI must not survive a switch.
+    """
+    source = ui_tox_source(name)
+    if source is None:
+        return {"applied": False,
+                "reason": f"neither this theme nor {DEFAULT_THEME!r} has a {UI_TOX}"}
+    write_file(ui_tox_path(), source.read_bytes())
+    return {"applied": True, "source": source, "path": ui_tox_path(),
+            "from_default": source != theme_ui_tox(name)}
+
+
 def plan(name: str) -> "dict[str, TdFile]":
     """Merge theme over baseline and validate, without touching the install."""
     baseline = load_baseline()
@@ -1006,6 +1110,11 @@ def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
     elif icons:
         icon_result["reason"] = f"no icon directory at {icons_dir()}"
 
+    # Always, and regardless of --no-icons: that flag is about the icon set, and
+    # a theme switch that skipped the UI would leave the previous theme's dialog
+    # sizes on screen while reporting the new theme.
+    ui_result = _apply_ui_tox(name)
+
     record_applied(name)
 
     return {
@@ -1015,6 +1124,7 @@ def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
         "findings": findings,
         "icon_findings": icon_findings,
         "icons": icon_result,
+        "ui_tox": ui_result,
         "warnings": warnings,
         "td_running": running,
     }

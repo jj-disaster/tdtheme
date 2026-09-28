@@ -153,6 +153,16 @@ def cmd_apply(args) -> int:
               + (f", {icons['backed_up']} backed up" if icons["backed_up"] else ""))
     elif icons.get("reason"):
         print(f"    icons: {icons['reason']}")
+    ui = result["ui_tox"]
+    if ui.get("applied"):
+        # The two cases have to be distinguishable, because they install
+        # different dialog geometry and one line of output otherwise says the
+        # same thing for both. The fallback is named as a fallback, not as a
+        # source, so nobody reads it as this theme shipping a stock file.
+        origin = "" if not ui["from_default"] else " (this theme has no ui.tox)"
+        print(f"    {T.UI_TOX}: written from {ui['source'].parent.name}{origin}")
+    elif ui.get("reason"):
+        print(f"    {T.UI_TOX}: {ui['reason']}")
     errors = [f for f in result["findings"] + result["icon_findings"]
               if f.severity == "error"]
     warnings = [f for f in result["findings"] + result["icon_findings"]

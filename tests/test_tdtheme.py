@@ -1029,6 +1029,122 @@ check((install / T.TOUCHCOLORS).read_bytes() == STOCK[T.TOUCHCOLORS],
 T.apply("default")
 check(installed_state() == STOCK, "the install is back at the baseline to end on")
 
+# ------------------------------------------------------------------- ui.tox
+#
+# The UI layout file, and the reason it needs a section of its own: it is the
+# one artefact this tool installs that it cannot read. `ui.tox` is a `.tox` -
+# TouchDesigner's own binary project format - so there is no parser, no diff,
+# and no way to check that a write did what was wanted. apply copies the bytes
+# and says which file they came from; that is the whole contract, and this suite
+# deliberately asserts nothing about the contents.
+#
+# What is testable is *which* file gets written, because the one hazard here is
+# silent rather than loud. Applying a theme that ships no ui.tox and leaving
+# the previous theme's in place produces an install that looks themed to the
+# wrong theme, and nothing about it is wrong enough to notice. The fallback to
+# `default` is what rules that out, and these checks are what hold it there.
+print()
+print("ui.tox")
+print("-" * 60)
+
+install_tox = install / T.SYSTEM_DIRNAME / T.UI_TOX
+default_tox = T.theme_ui_tox(T.DEFAULT_THEME)
+
+check(default_tox.is_file(),
+      "the default theme ships a ui.tox - it is what the fallback resolves to")
+check((PROJECT / "themes" / T.DEFAULT_THEME / T.UI_TOX).read_bytes()
+      == (PROJECT / "baseline" / T.SYSTEM_DIRNAME / T.UI_TOX).read_bytes(),
+      "default's ui.tox and the baseline copy are the same stock bytes")
+
+# Two themes, and the difference between them is the thing under test. `uitest`
+# holds a ui.tox and nothing else at all, so it is also the only way to see that
+# `list_themes` counts a directory containing nothing but this file. `uibare` is
+# an ordinary overlay theme that ships no ui.tox, which is the case the fallback
+# exists for.
+TOX_BYTES = b"\x00\x01tox-bytes-for-this-theme\x00"
+own_dir = T.themes_dir / "uitest"
+own_dir.mkdir(parents=True, exist_ok=True)
+(own_dir / T.UI_TOX).write_bytes(TOX_BYTES)
+bare_dir = T.themes_dir / "uibare"
+bare_dir.mkdir(parents=True, exist_ok=True)
+T.write_file(T.theme_path("uibare", T.TOUCHCOLORS),
+             overlay_text(OrderedDict([("tile.connection.hilite1", THIRD_VALUE)]),
+                          T.TOUCHCOLORS).encode())
+
+check(T.ui_tox_source("uitest") == T.theme_ui_tox("uitest"),
+      "a theme with its own ui.tox resolves to that file")
+check(T.ui_tox_source("uibare") == default_tox,
+      f"a theme without one falls back to {T.DEFAULT_THEME}'s")
+check("uitest" in T.list_themes(),
+      "a theme directory holding only a ui.tox is still a theme")
+
+T.apply("uitest")
+check(install_tox.read_bytes() == TOX_BYTES,
+      "apply writes the theme's own ui.tox over the install's")
+
+# The leak, stated directly: the install is holding `uitest`'s bytes right now,
+# and applying a theme that has nothing to say about the UI must clear them.
+T.apply("uibare")
+check(install_tox.read_bytes() == default_tox.read_bytes(),
+      "applying a theme with no ui.tox installs the stock one, not the previous "
+      "theme's")
+
+# --no-icons is about the icon set. A theme switch that quietly skipped the UI
+# would leave the previous theme's dialog geometry on screen while reporting
+# the new theme, so the flag has to leave this alone.
+T.apply("uitest")
+with contextlib.redirect_stdout(io.StringIO()) as no_icons_output:
+    tdtheme_cli.main(["apply", "uibare", "--no-icons"])
+check(install_tox.read_bytes() == default_tox.read_bytes(),
+      "apply --no-icons still installs the ui.tox")
+
+# No backup, on purpose - see _apply_ui_tox. Pinned because a later reader would
+# otherwise read the omission as an oversight and "fix" it into 1.1 MB per
+# apply.
+check(not list(T.backups_dir.glob(f"*/{T.UI_TOX}"))
+      and not list(T.backups_dir.glob(f"*/{T.SYSTEM_DIRNAME}/{T.UI_TOX}")),
+      "apply does not back up ui.tox, unlike the stores and the icon set")
+
+# The CLI line. The two cases have to be distinguishable in the output, because
+# they install different dialog geometry and say the same thing otherwise.
+with contextlib.redirect_stdout(io.StringIO()) as own_output:
+    tdtheme_cli.main(["apply", "uitest"])
+with contextlib.redirect_stdout(io.StringIO()) as bare_output:
+    tdtheme_cli.main(["apply", "uibare"])
+check(T.UI_TOX in own_output.getvalue() and "uitest" in own_output.getvalue(),
+      "apply names the ui.tox it wrote, and the theme it came from")
+check(T.DEFAULT_THEME in bare_output.getvalue(),
+      f"apply says when the ui.tox came from {T.DEFAULT_THEME} rather than the theme")
+
+# With nothing to fall back to there is nothing to install, and saying so beats
+# leaving the previous theme's file in place unremarked.
+stashed = T.theme_ui_tox(T.DEFAULT_THEME).read_bytes()
+default_tox.unlink()
+try:
+    result = T.apply("uibare")
+    check(not result["ui_tox"]["applied"] and T.UI_TOX in result["ui_tox"]["reason"],
+          "with no ui.tox anywhere, apply reports that rather than guessing")
+    check(install_tox.read_bytes() == stashed,
+          "and the install keeps what it had instead of being blanked")
+finally:
+    default_tox.write_bytes(stashed)
+
+# capture keeps a verbatim copy, so the pristine file is recoverable from the
+# baseline and not only from the theme that happens to ship it.
+T.apply("uitest")
+T.capture(force=True)
+check(T.baseline_ui_tox().read_bytes() == TOX_BYTES,
+      "capture copies the install's ui.tox into the baseline verbatim")
+check(T.baseline_ui_tox().parent.name == T.SYSTEM_DIRNAME,
+      "the baseline copy keeps the install's subdirectory, so Config/System "
+      "mirrors the layout it was captured from")
+
+T.apply("default")
+check(install_tox.read_bytes() == stashed,
+      "the install is back to the stock ui.tox to end on")
+check(installed_state() == STOCK,
+      "and the stores and icons are too, so the wrapper section starts stock")
+
 # --------------------------------------------------------------- the wrapper
 #
 # `tdtheme` is the entry point anyone actually types, and it is a shell script
