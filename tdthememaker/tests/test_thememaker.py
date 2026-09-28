@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -78,6 +79,38 @@ def theme_icons_dir(name: str) -> Path:
 
 def theme_recipe_path(name: str) -> Path:
     return RECIPES / f"{name}.recipe.json"
+
+
+# The one committed icon no recipe can reproduce, and the reason it is
+# worth two separate checks. `defaultnowarn.recipe.json` states its contract
+# in the recipe: 64x64 RGBA with every decoded byte zero, so the glyph does
+# not render. Two things follow, and they are checked at two points in the
+# run below, because they fail differently.
+#
+#   - the pixels: is the icon still the blank face, at the right size;
+#   - the bytes: has anything rewritten the file. A rewrite that happens to
+#     leave the pixels zeroed is still a rewrite, and only a hash catches it.
+#
+# Note what the check deliberately is not: `read_tiff` returns a TiffImage or
+# raises IconError, so `read_tiff(...) is not None` cannot fail and guarded
+# nothing. Both sites used to say exactly that.
+WARN_FACE_SIZE = (64, 64)
+
+
+def warn_face_digest() -> str:
+    return hashlib.sha256(
+        (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes()
+    ).hexdigest()
+
+
+def check_blank_warn_face(label: str) -> None:
+    image = icons.read_tiff(
+        (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes())
+    width, height = WARN_FACE_SIZE
+    check(image.size == WARN_FACE_SIZE
+          and len(image.pixels) == width * height * 4
+          and not any(image.pixels),
+          label)
 
 
 tmp = Path(tempfile.mkdtemp(prefix="tdthememaker-"))
@@ -829,6 +862,11 @@ for theme in THEMES:
 # runs it.
 from tdthememaker import cli as thememaker_cli  # noqa: E402
 
+# Hash the hand-placed icon before either `build` runs, so "survived" below
+# is a byte comparison against a known value rather than the hope that the
+# file still parses.
+warn_face_before = warn_face_digest()
+
 probe = subprocess.run(
     [sys.executable, "-m", "tdthememaker.cli", "build",
      "defaultnowarn", "--check"],
@@ -842,9 +880,12 @@ refuse = subprocess.run(
     capture_output=True, text=True, cwd=ROOT)
 check(refuse.returncode == 1 and "--force" in refuse.stderr,
       "`build` refuses to overwrite an existing set without --force")
-check(icons.read_tiff(
-    (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes()) is not None,
-    "the hand-placed icon survived every command above")
+
+check_blank_warn_face(
+    f"the hand-placed icon is still {WARN_FACE_SIZE[0]}x{WARN_FACE_SIZE[1]} "
+    f"and every decoded byte is zero")
+check(warn_face_digest() == warn_face_before,
+      "the hand-placed icon's bytes are unchanged by the two build calls")
 
 # ---------------------------------------------------------------- export
 
@@ -988,10 +1029,14 @@ check((applied_marker.read_bytes() if applied_marker.exists() else None)
       "the real last-applied marker is exactly as it was before this suite")
 
 # The hand-placed icon check above ran against the real theme; make sure the
-# temp-dir games above did not touch it.
-check(icons.read_tiff(
-    (theme_icons_dir("defaultnowarn") / "WarnFace.tiff").read_bytes()) is not None,
-    "the hand-placed icon is still intact after the export tests")
+# temp-dir games above did not touch it. The hash is the stronger of the two
+# assertions: a rewrite that left the image blank would still be a rewrite,
+# and `T.root` and friends were reassigned a dozen lines up.
+check(warn_face_digest() == warn_face_before,
+      "the hand-placed icon's bytes are unchanged by the export tests")
+check_blank_warn_face(
+    f"the hand-placed icon is still {WARN_FACE_SIZE[0]}x{WARN_FACE_SIZE[1]} "
+    f"and every decoded byte is zero after the export tests")
 
 shutil.rmtree(tmp, ignore_errors=True)
 
