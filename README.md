@@ -80,11 +80,43 @@ Format details that matter, all verified rather than assumed:
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
-| `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; the `ui.tox` is always written) |
+| `apply NAME` | merge, validate, write, and report what changed (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
 | `icons preview [NAME]` | write a PNG contact sheet so the icons can actually be looked at |
+
+### What `apply` prints
+
+One line per thing it wrote, so the summary is read rather than scanned:
+
+```
+$ tdtheme apply midnight
+    Applied theme 'midnight'
+    TouchColors: 20 setting(s) changed (tile 11, default 5, worksheet 4)
+    TouchOptions: unchanged
+    icons: 97 written, 0 already matched the baseline
+    ui.tox: written from default (this theme has no ui.tox)
+    TouchDesigner is closed; changes are live on next launch.
+```
+
+The two store lines are counted **against the file as installed**, not
+against the theme's overlay, because the question is what *this write* did. A
+store the install had drifted on shows up as being corrected, and re-applying
+the theme that is already installed reports nothing changed. Keys are grouped
+by their first dotted component, because the largest shipped theme changes 460
+of them and the prefixes are what make that legible; at most four are named
+and the rest are counted. `tdtheme diff` is the full listing.
+
+A key that the incoming file *does not have* is reported separately as
+removed. An overlay may add a key the baseline lacks, so switching to a theme
+that does not carry it drops that key — the same state leak the icon fill-in
+exists to prevent, and one that a "keys that differ" check cannot see, because
+the dropped key is not in the file being compared.
+
+`TouchOptions: unchanged` is not padding: `apply` writes both stores every
+time, and a line per store is what makes "the options were considered" visible
+without reading the code.
 
 ## How themes are stored
 

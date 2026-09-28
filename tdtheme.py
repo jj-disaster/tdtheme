@@ -41,7 +41,7 @@ __all__ = [
     "ThemeError", "FileFormatError", "ThemeNotFound", "ValidationError",
     "TdFile", "Finding", "Status", "IconFinding",
     "parse", "serialize", "load_file", "read_bytes", "write_file",
-    "merge", "validate", "diff",
+    "merge", "validate", "diff", "store_changes",
     "load_overlay",
     "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
     "icons_dir", "baseline_icons_dir", "theme_icons_dir",
@@ -1083,6 +1083,24 @@ def _apply_ui_tox(name: str) -> dict:
             "from_default": source != theme_ui_tox(name)}
 
 
+def store_changes(before: "TdFile", after: "TdFile") -> "dict":
+    """What writing `after` over `before` did, as data rather than bytes.
+
+    Two directions, because `diff` only reports keys that are in `after`. An
+    overlay may add a key the baseline does not have - `diff` counts that as a
+    change - so a theme that adds one and a later theme that does not would
+    otherwise drop it silently. That is the same class of leak the icon fill-in
+    exists to prevent, and it deserves to be counted rather than assumed away.
+
+    `before` is the file as installed, not the baseline. An apply reports what
+    *it* changed, so a store the user had drifted by hand shows up here as
+    being corrected, which is the truth about the write that just happened.
+    """
+    changed = diff(before, after)
+    removed = [key for key in before.data if key not in after.data]
+    return {"changed": changed, "removed": removed}
+
+
 def plan(name: str) -> "dict[str, TdFile]":
     """Merge theme over baseline and validate, without touching the install."""
     baseline = load_baseline()
@@ -1135,6 +1153,7 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
             f"Restart to see changes"
         )
 
+    changes = {}
     backup_dir = None
     if backup:
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1144,6 +1163,16 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
             installed = cfg / store
             if installed.exists():
                 shutil.copy2(installed, backup_dir / store)
+
+    # Read what is about to be overwritten, because the report is about what
+    # this apply changed rather than what the theme's overlay contains. The
+    # latter is `tdtheme diff`. Both reads happen before either write, so the
+    # comparison is against the pre-apply state even if a write fails later.
+    for store in STORE_FILES:
+        installed = cfg / store
+        if installed.exists():
+            changes[store] = store_changes(load_file(installed),
+                                           result["files"][store])
 
     for store in STORE_FILES:
         write_file(cfg / store, result["files"][store].to_bytes())
@@ -1166,6 +1195,7 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
         "theme": name,
         "files": list(STORE_FILES),
         "backup": backup_dir,
+        "changes": changes,
         "findings": findings,
         "icon_findings": icon_findings,
         "icons": icon_result,

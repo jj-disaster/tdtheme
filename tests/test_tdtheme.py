@@ -1070,6 +1070,88 @@ check("none" not in reported[0].lower(),
 T.apply("default")
 check(installed_state() == STOCK, "the install is back at the baseline to end on")
 
+# ---------------------------------------------------------- what apply changed
+#
+# The per-store summary line. Counted against the *installed* file rather than
+# the theme's overlay, because the question the line answers is "what did this
+# write do", not "what does the theme contain" - which is `tdtheme diff`.
+#
+# Synthetic themes rather than the shipped ones, because this section's
+# themes_dir holds only `default` plus a few stand-ins, and copying two more
+# full icon sets to test a line about TouchColors would be a poor trade.
+T.apply("default")
+recolours = T.themes_dir / "recolours"
+recolours.mkdir(parents=True, exist_ok=True)
+(recolours / f"{T.TOUCHCOLORS}.yaml").write_text(
+    'tile.connection.hilite1: ["0.11", "0.22", "0.33"]\n'
+    'worksheet.bg: ["0.44", "0.55", "0.66"]\n')
+(recolours / f"{T.TOUCHOPTIONS}.yaml").write_text("CHOP.height: 77\n")
+
+r_changes = T.apply("recolours")["changes"]
+check(set(r_changes) == set(T.STORE_FILES),
+      f"apply reports changes for both stores ({sorted(r_changes)})")
+check(sorted(r_changes[T.TOUCHCOLORS]["changed"]) == ["tile.connection.hilite1",
+                                                       "worksheet.bg"],
+      f"and names the keys it actually set ({sorted(r_changes[T.TOUCHCOLORS]['changed'])})")
+check(sorted(r_changes[T.TOUCHOPTIONS]["changed"]) == ["CHOP.height"],
+      f"TouchOptions is reported the same way ({sorted(r_changes[T.TOUCHOPTIONS]['changed'])})")
+check(not r_changes[T.TOUCHCOLORS]["removed"],
+      f"and nothing is reported removed coming off the baseline ({r_changes[T.TOUCHCOLORS]['removed']})")
+again = T.apply("recolours")["changes"]
+check(not again[T.TOUCHCOLORS]["changed"] and not again[T.TOUCHOPTIONS]["changed"],
+      f"re-applying the theme already installed reports nothing changed "
+      f"({len(again[T.TOUCHCOLORS]['changed'])} keys)")
+
+# The direction `diff` does not cover. An overlay may add a key the baseline
+# lacks, and a later theme that does not carry it drops that key - which is the
+# icon-fill leak in another guise, and would be silent if only `diff` were
+# consulted, since the dropped key is absent from the file being compared.
+addskey = T.themes_dir / "addskey"
+addskey.mkdir(parents=True, exist_ok=True)
+(addskey / f"{T.TOUCHCOLORS}.yaml").write_text('zzcustom.thing: ["1", "2", "3"]\n')
+(addskey / f"{T.TOUCHOPTIONS}.yaml").write_text("")
+T.apply("addskey", force=True)
+check("zzcustom.thing" in T.load_file(install / T.TOUCHCOLORS),
+      "a theme can add a key the baseline does not have")
+dropped = T.apply("default")["changes"]
+check(dropped[T.TOUCHCOLORS]["removed"] == ["zzcustom.thing"],
+      f"and the next theme reports it as removed ({dropped[T.TOUCHCOLORS]['removed']})")
+check("zzcustom.thing" not in T.load_file(install / T.TOUCHCOLORS),
+      "so the removal is visible in the report and not only in the bytes")
+
+# The line, and the cap on how many prefixes it names. The largest shipped theme
+# changes 460 keys, so a summary that listed them would be a listing nobody
+# reads; its overlay is copied rather than the whole theme, since the icons are
+# not what this is about.
+big = T.themes_dir / "bigkeys"
+big.mkdir(parents=True, exist_ok=True)
+(big / f"{T.TOUCHCOLORS}.yaml").write_bytes(
+    (PROJECT / "themes" / "mono" / f"{T.TOUCHCOLORS}.yaml").read_bytes())
+(big / f"{T.TOUCHOPTIONS}.yaml").write_text("")
+BIG_KEYS = len(T._load_theme("bigkeys")[T.TOUCHCOLORS])
+with contextlib.redirect_stdout(io.StringIO()) as big_output:
+    code = tdtheme_cli.main(["apply", "bigkeys"])
+big_lines = [ln.strip() for ln in big_output.getvalue().splitlines()
+             if T.TOUCHCOLORS in ln]
+check(code == 0 and big_lines and f"{BIG_KEYS} setting(s) changed" in big_lines[0],
+      f"the summary counts what a big theme changes ({big_lines})")
+check(any("more" in ln for ln in big_lines),
+      f"and says how many prefixes it did not name rather than listing them ({big_lines})")
+check("TouchOptions: unchanged" in big_output.getvalue(),
+      "a store this theme does not touch says so rather than printing a zero")
+
+# A store the install does not have cannot be compared against, and calling
+# every one of its keys a change would be a lie about a file that did not exist.
+(install / T.TOUCHOPTIONS).unlink()
+check(T.TOUCHOPTIONS not in T.apply("default")["changes"],
+      "a store missing from the install is absent from the report, not all-changed")
+T.apply("default")
+check(T.TOUCHOPTIONS in T.apply("default")["changes"],
+      "and present again once the file exists")
+T.apply("default")
+check(installed_state() == STOCK, "and the install is back at the baseline to end on")
+
+
 # ------------------------------------------------------------------- ui.tox
 #
 # The UI layout file, and the reason it needs a section of its own: it is the

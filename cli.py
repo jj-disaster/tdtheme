@@ -17,6 +17,10 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_VALIDATION = 2
 
+# How many key prefixes `_settings_line` names before saying "+N more". Four
+# reads as a list; anything longer stops being a summary.
+_SETTING_GROUPS_SHOWN = 4
+
 
 def _finding_lines(findings, indent="    ") -> None:
     for finding in findings:
@@ -134,6 +138,46 @@ def cmd_diff(args) -> int:
     return EXIT_OK
 
 
+def _setting_groups(keys) -> "list[tuple[str, int]]":
+    """Count `keys` by their first dotted component, biggest group first.
+
+    The prefix is the most useful thing about a TouchDesigner key when there
+    are 460 of them: `parms 120, tile 48, georender 48` says "this is a
+    monochrome pass" where 460 individual lines say nothing.
+    """
+    counts = {}
+    for key in keys:
+        head = key.split(".")[0]
+        counts[head] = counts.get(head, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def _settings_line(store: str, changes: dict) -> str:
+    """The per-store summary `apply` prints, parallel to the icons and ui.tox lines.
+
+    Counted rather than listed, because the largest shipped theme changes 460
+    keys and a summary that lists them is a summary nobody reads. `tdtheme diff`
+    is the full listing, and `plan`'s result is what this is derived from, so
+    the two cannot disagree about which keys changed.
+    """
+    changed, removed = changes["changed"], changes["removed"]
+    if not changed and not removed:
+        return f"{store}: unchanged"
+    line = f"{store}: {len(changed)} setting(s) changed"
+    if changed:
+        groups = _setting_groups(changed)
+        shown = groups[:_SETTING_GROUPS_SHOWN]
+        detail = ", ".join(f"{head} {n}" for head, n in shown)
+        if len(groups) > len(shown):
+            detail += f", +{len(groups) - len(shown)} more"
+        line += f" ({detail})"
+    if removed:
+        # Worth naming rather than folding into a count: a key that silently
+        # disappears is the icon-fill leak in another guise.
+        line += f", {len(removed)} removed"
+    return line
+
+
 def cmd_apply(args) -> int:
     try:
         result = T.apply(args.name, force=args.force, icons=not args.no_icons,
@@ -147,6 +191,14 @@ def cmd_apply(args) -> int:
     print(f"Applied theme {result['theme']!r}")
     for warning in result["warnings"]:
         print(f"\n    WARNING: {warning}")
+    # A store that was not installed before cannot be compared, and saying so
+    # beats reporting every key as a change.
+    for store in T.STORE_FILES:
+        changes = result["changes"].get(store)
+        if changes is None:
+            print(f"    {store}: written (no previous file to compare against)")
+        else:
+            print(f"    {_settings_line(store, changes)}")
     icons = result["icons"]
     if icons.get("applied"):
         summary = (f"    icons: {len(icons['written'])} written, "

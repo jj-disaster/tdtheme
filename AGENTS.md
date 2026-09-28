@@ -164,6 +164,16 @@ not into `backups/`.
 
 These cost time. They are properties of the code, not opinions.
 
+- **`diff` only looks in `other`.** `tdtheme.diff(base, other)` reports keys
+  *in `other`* that are added or changed, and cannot report a key that `other`
+  does not have. That is correct for `tdtheme diff`, whose question is what a
+  theme *adds to* the baseline. It is not sufficient for "what did this apply
+  change", because an overlay may add a key the baseline lacks and the next
+  theme will drop it — a key that is absent from the comparison and therefore
+  invisible. `store_changes` wraps `diff` and adds the dropped keys, and the
+  `apply` summary line prints them as `N removed`. Do not build a
+  change-report on bare `diff` and conclude removals are impossible; they are
+  merely unreported.
 - **Implicit protocol calls defeat grep.** `len(x)` and `x in y` reach
   `__len__` and `__contains__` without either name appearing at the call site.
   `TdFile.__len__` and `TdFile.__contains__` look unused to a grep and are used
