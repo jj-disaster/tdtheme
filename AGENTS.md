@@ -61,6 +61,17 @@ probes are what actually catch it. Keep both kinds.
   other test catches. Verify by importing each module and resolving `__all__`.
 - **`docs/icon-storage-design.md` is an unimplemented proposal**, deliberately.
   It is not a description of current behaviour. Do not "fix" code to match it.
+- **A theme ships all 97 icons, and `apply` fills the rest from the baseline.**
+  Both halves are load-bearing, and the second looks redundant next to the
+  first, so it is the first thing to get "simplified" away. `copy_icons` takes
+  `fill_from=baseline_icons_dir()`; without it `apply` was only a total
+  overwrite while every set happened to be complete, and a partial set left the
+  omitted icons as the *previous* theme had left them. That is the exact state
+  leak the complete-set design exists to prevent, and the case where it bites -
+  an interrupted copy - is the one nobody would notice. `fill_from` only ever
+  adds names: a name the theme ships wins, including one this build's baseline
+  lacks, and nothing is ever deleted, because pruning an icon the baseline does
+  not know about would break a newer TouchDesigner build.
 
 ## `ui.tox` is a copy, and the three decisions around it are settled
 
@@ -73,9 +84,10 @@ done is shipping a whole file and copying it over the top. A theme may carry
 Three choices here look like omissions and are not. Do not "fix" them.
 
 - **It is not backed up**, unlike the two stores and the icon set. It is 1.1 MB
-  and TouchDesigner rewrites it on any layout change, so an apply-time copy is a
-  snapshot of the last session, at one copy per apply. `tests/test_tdtheme.py`
-  pins the absence, because it reads as an oversight.
+  and the only thing that ever writes it is `apply` itself, so a backup would
+  hold a copy of whichever theme was applied last - bytes that are already in
+  git, in that theme's own folder - at 1.1 MB per apply.
+  `tests/test_tdtheme.py` pins the absence, because it reads as an oversight.
 - **A theme with no `ui.tox` falls back to `default`'s**, rather than writing
   nothing. Writing nothing leaves the *previous* theme's dialogs in place while
   `list` reports the new theme, which is the leak `default` prevents. The
@@ -87,11 +99,14 @@ Three choices here look like omissions and are not. Do not "fix" them.
 
 `--no-icons` does **not** skip it; that flag is about the icon set.
 
-A `.tox` is written *by TouchDesigner* — a project file, saved as state. So
-`apply` may need re-running after a session that changed the layout, and unlike
-the stores and the icons, `ui.tox` is absent from `check-td-writes` on purpose.
-A hand-arranged UI is the one thing here that is **not** recoverable: it exists
-only where the user put it. Copy it into a theme folder, not into `backups/`.
+TouchDesigner **never writes** this file. It reads it, and the only way a new
+`ui.tox` comes into existence is a manual export, which lands wherever the user
+saved it rather than over the one in the install folder. So unlike the stores
+and the icons, `ui.tox` is absent from `check-td-writes` on purpose, and `apply`
+does *not* need re-running after a session: nothing in the install can have
+moved underneath it. A hand-arranged UI is the one thing here that is **not**
+recoverable — it exists only where the user put it. Copy it into a theme folder,
+not into `backups/`.
 
 ## Traps in this codebase
 

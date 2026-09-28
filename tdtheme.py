@@ -906,9 +906,10 @@ def validate_icons(name: str) -> "list[IconFinding]":
       read the file at all (it logs "Couldn't find icon" and draws nothing);
     - an icon whose dimensions changed, because TouchDesigner sizes most of
       these glyphs from the file and a resized one is visibly wrong;
-    - an icon present in the install but absent from the theme, which is
-      harmless (it keeps its shipped bytes) but almost always means the theme
-      was generated from a stale baseline.
+    - an icon in the baseline but absent from the theme, which is now filled in
+      from the baseline rather than left as the previous theme left it, so it
+      costs nothing - but it still usually means the theme was generated from a
+      stale baseline, or assembled by hand and interrupted.
 
     An unknown theme name raises rather than validating nothing, which would
     read as a clean bill of health.
@@ -953,12 +954,20 @@ def validate_icons(name: str) -> "list[IconFinding]":
                 "not in the baseline - a new name, or from a different build. "
                 "It will be written, but nothing here can vouch for it."))
 
-    for icon_name in tdicons.icon_names(baseline):
-        if icon_name not in names:
-            findings.append(IconFinding(
-                "warning", icon_name,
-                "in the baseline but not in this theme, so it keeps its shipped "
-                "bytes. Regenerate the theme if that is not intended."))
+    # One finding for the whole shortfall, not one per icon. A theme missing 94
+    # of 97 used to print 94 identical lines, which is not information - it is
+    # a count wearing 94 costumes - and it pushed the actual findings off the
+    # screen.
+    baseline_names = tdicons.icon_names(baseline)
+    missing = [name for name in baseline_names if name not in names]
+    if missing:
+        findings.append(IconFinding(
+            "warning", ICONS_DIRNAME,
+            f"this theme ships {len(names)} of the baseline's {len(baseline_names)} "
+            f"icons. The other {len(missing)} are filled in from the baseline at "
+            f"apply time, so the install still ends up complete and the missing "
+            f"glyphs will be the stock ones rather than the previous theme's. "
+            f"Regenerate the theme if a partial set is not what you meant."))
     return findings
 
 
@@ -1019,14 +1028,21 @@ def preview_icons(name, path=None, *, columns: int = 10, cell: int = 72):
 
 
 def _apply_icon_set(name: str, backup_dir: Path) -> dict:
-    """Write a theme's icons into the install, backing up what it replaces."""
+    """Write a theme's icons into the install, backing up what it replaces.
+
+    Anything the theme does not ship is filled from the baseline, not left as
+    the previously applied theme left it. Both shipped themes and the fallback
+    reach the same place: the install ends up holding a complete set, so it can
+    never be holding a mixture of two themes while `status` reports one.
+    """
     theme = theme_icons_dir(name)
     if not theme.is_dir():
         return {"applied": False, "reason": f"{name} has no icon directory",
-                "written": [], "unchanged": [], "backed_up": 0}
+                "written": [], "unchanged": [], "filled": [], "backed_up": 0}
     result = tdicons.copy_icons(theme, icons_dir(),
                                 backup=backup_dir / ICONS_DIRNAME,
-                                only_changed_against=baseline_icons_dir())
+                                only_changed_against=baseline_icons_dir(),
+                                fill_from=baseline_icons_dir())
     result["applied"] = True
     return result
 

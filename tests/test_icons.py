@@ -333,11 +333,77 @@ partial.mkdir(parents=True, exist_ok=True)
 shutil.copytree(mid, partial / T.ICONS_DIRNAME)
 (partial / T.ICONS_DIRNAME / names[0]).unlink()
 findings = T.validate_icons("partial")
-missing = [f for f in findings if "not in this theme" in f.message]
-check(bool(missing), f"an incomplete icon set is reported (found {len(missing)})")
-check(all(f.severity == "warning" for f in missing),
+shortfall = [f for f in findings if "filled in from the baseline" in f.message]
+check(bool(shortfall),
+      f"an incomplete icon set is reported (found {len(shortfall)})")
+check(all(f.severity == "warning" for f in shortfall),
       "an incomplete icon set is a warning, not an error - the glyph still "
-      "renders, it just keeps the shipped bytes")
+      "renders, and the baseline now supplies it")
+# One finding for the whole shortfall, not one per absent icon. A theme
+# missing 94 of 97 used to print 94 identical lines.
+check(len(shortfall) == 1,
+      f"the shortfall is one aggregated finding, not one per icon "
+      f"(got {len(shortfall)})")
+
+# ------------------------------------------------- partial sets are completed
+#
+# The case that made the old behaviour a bug rather than a rough edge. Applying
+# a theme that ships 96 of 97 used to leave the 97th as the previously applied
+# theme had left it, so switching themes could leave a glyph from a theme
+# `tdtheme list` no longer claimed to be running - the leak the complete-set
+# design exists to prevent. The absent icon is now filled in from the baseline,
+# so the install ends up complete whatever it held before.
+THEMED = T.themes_dir / "ninety-six"
+THEMED.mkdir(parents=True, exist_ok=True)
+shutil.copytree(mid, THEMED / T.ICONS_DIRNAME)
+ABSENT = names[0]
+(THEMED / T.ICONS_DIRNAME / ABSENT).unlink()
+
+# Start from a themed install, so "left as it was" and "filled from the
+# baseline" are genuinely different outcomes and the test can tell them apart.
+T.apply("midnight")
+result = T.apply("ninety-six")
+check((live_icons / ABSENT).read_bytes() == (BASE / ABSENT).read_bytes(),
+      "an icon the theme omits is filled in from the baseline, not left as the "
+      "previous theme left it")
+check((live_icons / ABSENT).read_bytes() != (mid / ABSENT).read_bytes(),
+      "and that fill is visibly different from the previous theme's icon, so "
+      "the check above is not passing by accident")
+check(len(T.tdicons.icon_names(live_icons)) == len(names),
+      f"the install still holds all {len(names)} icons after a partial apply")
+check(ABSENT in result["icons"]["filled"],
+      "apply reports which icons it filled in")
+check(ABSENT in result["icons"]["written"],
+      "and counts the fill as a write, because the install had the previous "
+      "theme's bytes there and they had to move")
+
+# The other direction: a name the theme has and the baseline does not is still
+# the theme's. Filling in adds names, it never overrides the source.
+EXTRA = "NotInBaseline.tiff"
+shutil.copy2(mid / names[1], THEMED / T.ICONS_DIRNAME / EXTRA)
+result = T.apply("ninety-six")
+check((live_icons / EXTRA).read_bytes() == (mid / names[1]).read_bytes(),
+      "an icon the theme ships and the baseline lacks is installed as-is")
+check(EXTRA not in result["icons"]["filled"],
+      "and is not reported as filled in, because it came from the theme")
+(THEMED / T.ICONS_DIRNAME / EXTRA).unlink()
+# Nothing in the tool ever deletes an installed icon, so the next apply - and
+# this one - has to do it. That is deliberate rather than an oversight: the
+# baseline is a capture of one build, and a theme carrying a name this build
+# does not have would be pruned away by a later `apply default` if apply
+# deleted the unknown. The install is a live directory, not a reconstruction.
+(live_icons / EXTRA).unlink()
+
+# A complete theme must be entirely unaffected by the fill-in path: nothing
+# filled, and the same written/unchanged split as before. Without this the new
+# behaviour could quietly change the common case and no other check would see it.
+full = T.apply("midnight")
+check(full["icons"]["filled"] == [],
+      f"a complete theme fills nothing in (filled {len(full['icons']['filled'])})")
+check(len(full["icons"]["written"]) == len(names),
+      f"a complete theme still writes all {len(names)} icons "
+      f"(wrote {len(full['icons']['written'])})")
+T.apply("default")
 
 # A corrupt icon must be an error, because TouchDesigner will refuse the file.
 corrupt = T.themes_dir / "corrupt"

@@ -148,9 +148,13 @@ def cmd_apply(args) -> int:
         print(f"\n    WARNING: {warning}")
     icons = result["icons"]
     if icons.get("applied"):
-        print(f"    icons: {len(icons['written'])} written, "
-              f"{len(icons['unchanged'])} already matched the baseline"
-              + (f", {icons['backed_up']} backed up" if icons["backed_up"] else ""))
+        summary = (f"    icons: {len(icons['written'])} written, "
+                   f"{len(icons['unchanged'])} already matched the baseline")
+        if icons.get("filled"):
+            summary += f", {len(icons['filled'])} filled in from the baseline"
+        if icons["backed_up"]:
+            summary += f", {icons['backed_up']} backed up"
+        print(summary)
     elif icons.get("reason"):
         print(f"    icons: {icons['reason']}")
     ui = result["ui_tox"]

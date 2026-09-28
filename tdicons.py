@@ -37,6 +37,14 @@ deliberate, and it is why the two tools are split. A complete set means:
 - `apply` can be a dumb, total, order-independent overwrite of a known file
   list, with no patch logic that could half-apply.
 
+A set that is *not* complete is still applied safely, and this is the one place
+where the completeness above is a convention rather than a requirement. Anything
+the theme does not ship is filled in from the baseline rather than left as the
+previously applied theme left it, so a partial set cannot leave the install
+holding a mixture of two themes. Without that, `apply` was only a total
+overwrite when every set happened to be complete - and an interrupted or
+hand-assembled set is exactly the case where nobody would notice.
+
 The cost is ~780 KB per theme, which is irrelevant next to a 764 KB install.
 
 The overlay behaviour the colour files rely on is preserved where it matters:
@@ -117,7 +125,8 @@ __all__ = [
 # ==========================================================================
 
 
-def copy_icons(source, destination, *, backup=None,               only_changed_against=None) -> "dict[str, str]":
+def copy_icons(source, destination, *, backup=None, only_changed_against=None,
+               fill_from=None) -> "dict":
     """Install an icon set, optionally backing up what it replaces.
 
     `only_changed_against` is a directory to diff against: a file whose bytes
@@ -125,10 +134,27 @@ def copy_icons(source, destination, *, backup=None,               only_changed_a
     sake - TouchDesigner has these open, and touching only what actually
     differs keeps the install's mtimes meaningful as evidence of what a theme
     changed.
+
+    `fill_from` completes a partial set. Every name it holds that `source`
+    lacks is installed too, taken from `fill_from`, and `source` wins any name
+    both hold. The result is a whole icon set rather than a patch over whatever
+    the install happened to contain, which is the point: a theme switch that
+    leaves the previous theme's glyphs in place leaks state, and a leaked glyph
+    is a missing-looking icon that nothing reports. Every shipped theme ships
+    all 97, so in practice the union equals `source` and this changes nothing -
+    it is what makes a hand-assembled or interrupted set safe rather than
+    silently partial.
     """
     source = Path(source)
     destination = Path(destination)
     names = icon_names(source)
+    filled = {}
+    if fill_from is not None:
+        fill_from = Path(fill_from)
+        present = set(names)
+        filled = {name: fill_from / name for name in icon_names(fill_from)
+                  if name not in present}
+        names = names + sorted(filled)
     if not names:
         raise IconError(f"{source} holds no icons; refusing to write an empty set")
 
@@ -139,9 +165,9 @@ def copy_icons(source, destination, *, backup=None,               only_changed_a
             for name in icon_names(only_changed_against)
         }
 
-    result = {"written": [], "unchanged": [], "backed_up": 0}
+    result = {"written": [], "unchanged": [], "filled": sorted(filled), "backed_up": 0}
     for name in names:
-        raw = (source / name).read_bytes()
+        raw = (filled[name] if name in filled else source / name).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         target = destination / name
         if (baseline_hashes is not None and baseline_hashes.get(name) == digest

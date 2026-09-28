@@ -153,6 +153,14 @@ while claiming to be stock. A total overwrite is the only model where switching
 themes cannot leak state. The cost is disk - 1.9 MB across the six shipped sets,
 against a few KB for a delta scheme - and that was an accepted trade.
 
+A theme that is *not* complete is still safe. Anything it does not ship is
+filled in from the baseline at apply time, so a partial set - an interrupted
+copy, or a folder assembled by hand - gives you that theme's glyphs on top of
+stock ones rather than the *previous* theme's glyphs. `apply` says how many it
+filled in, and `validate` reports the shortfall as a single warning rather than
+one line per missing icon. Filling in only ever adds names: a name the theme
+ships always wins, including a name this build's baseline does not have.
+
 **Each set is generated from a recipe**, which lives in `tdthememaker/`, so the
 binary blobs in git are reproducible artefacts rather than the source of truth:
 
@@ -293,13 +301,13 @@ total overwrite, the same property the icon sets have and for the same reason.
 Three consequences worth knowing:
 
 - **It is not backed up.** Unlike the two stores and the icon set, `apply`
-  leaves no copy of the outgoing `ui.tox` in `backups/`. It is 1.1 MB,
-  TouchDesigner rewrites it whenever the layout changes, so a copy taken at
-  apply time is a snapshot of the last session rather than anything worth
-  keeping - and at one per apply it would grow `backups/` by hundreds of
-  megabytes. The stock file is recoverable from `themes/default/ui.tox` and
-  from `baseline/System/ui.tox`. **A hand-arranged UI is not**, so keep it in a
-  theme folder, which is where it came from.
+  leaves no copy of the outgoing `ui.tox` in `backups/`. It is 1.1 MB, and the
+  only thing that ever writes it is `apply` itself, so a copy taken at apply
+  time is the previous theme's file - bytes that are already in git, in that
+  theme's own folder - and at one per apply it would grow `backups/` by
+  hundreds of megabytes. The stock file is recoverable from
+  `themes/default/ui.tox` and from `baseline/System/ui.tox`. **A hand-arranged
+  UI is not**, so keep it in a theme folder, which is where it came from.
 - **`--no-icons` does not skip it.** That flag is about the icon set. A theme
   switch that skipped the UI would leave the previous theme's geometry in place
   while reporting the new theme, which is the exact failure the fallback above
@@ -413,7 +421,10 @@ update to confirm this still holds for that build.
   deduplicating the unchanged icons would reintroduce the leak that design
   avoids. The regenerated sets are 97-128 KB each rather than the stock
   764 KB, because re-encoding drops the Photoshop metadata and re-applies LZW -
-  the bulk of the 1.9 MB is `default`, which copies the baseline verbatim.
+  the bulk of the 1.9 MB is `default`, which copies the baseline verbatim. A
+  partial set no longer leaks the previous theme's icons, so this is a storage
+  trade rather than a correctness one - but storage is still the honest reason
+  the sets are duplicated.
 - **The TIFF codec handles only what TouchDesigner ships**: little-endian
   classic TIFF, single page, 8 bits per sample, photometric RGB, LZW or
   uncompressed, 3 or 4 samples. Big-endian, planar, 16-bit and palette images
@@ -535,13 +546,14 @@ per-build, so re-run this after a TouchDesigner update. The tool itself
 re-checks the baseline build number on every `status`.
 
 **`ui.tox` is not among them, and that omission is deliberate rather than an
-oversight.** A `.tox` is TouchDesigner's own format, so unlike the two stores
-this file is written *by TouchDesigner* — a `.tox` is a project file, and the UI
-layout is state it saves. Expect `apply` to need re-running after a session in
-which the layout changed, and treat a theme's `ui.tox` as the layout you want
-at launch rather than something that survives editing. Adding it to
-`check-td-writes` would turn that expectation into a measurement, and is the
-obvious next step if it turns out to matter.
+oversight.** TouchDesigner **never writes** this file: it reads it at startup,
+and the only way a new `ui.tox` comes into existence is a manual export, which
+lands wherever the user saved it rather than over the one in the install folder.
+So `apply` does not need re-running after a session — nothing in the install
+can have moved underneath it — and a theme's `ui.tox` is the layout you get at
+launch, full stop. It is absent here because there is nothing to check, not
+because the answer is unknown: the other three were measured to be read-only
+and this one is read-only by construction.
 
 The tool has **no third-party dependencies**. It uses PyYAML when
 importable (TouchDesigner bundles 6.0.3) and otherwise falls back to a
