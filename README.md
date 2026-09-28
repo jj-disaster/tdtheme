@@ -80,7 +80,7 @@ Format details that matter, all verified rather than assumed:
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
-| `apply NAME` | merge, validate, back up, write (`--no-icons` to skip the icon set; the `ui.tox` is always written) |
+| `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
@@ -100,6 +100,39 @@ tile.connection.hilite1: ["1", "0.85", "0.35"]
 Sparse rather than full-file copies because a TouchDesigner update can add
 new keys. A full copy would silently drop them; an overlay inherits them
 from the baseline.
+
+### Undo is re-applying, not restoring
+
+`apply` does **not** keep a copy of what it replaces unless you pass
+`--backup`. That is a change of default, and the reasoning is worth stating
+because the safety net it removes looks load-bearing until you check where the
+files come from.
+
+The install is reconstructible from what is already in this repository. The two
+stores only ever hold `merge(baseline/, themes/<name>/)`, and the icon set only
+ever holds a theme's own icons completed from `baseline/Icons/` — so for any
+theme that is committed, the bytes on disk are a pure function of two files git
+already tracks. `tdtheme apply <the previous theme>` puts them back exactly, and
+`tdtheme status` tells you which theme that is. This is not a claim in a
+comment; `tests/test_icons.py` rebuilds a themed install from `baseline/` plus
+`themes/` and compares it byte for byte.
+
+What a backup actually adds is cover for the one input git does not have: a
+theme you edited on disk and have not committed. That is worth having when you
+are in the middle of an edit, and not worth 36 KB to 464 KB on every apply for
+the rest of the time — the set varies with how much of the install the outgoing
+theme had changed, and nothing ever pruned `backups/`.
+
+So:
+
+- **`tdtheme apply midnight`** — no copy kept, nothing to clean up. Undo by
+  re-applying, or `tdtheme reset` for stock.
+- **`tdtheme apply midnight --backup`** — the outgoing stores and icons are
+  copied to `backups/<timestamp>/` first. The `ui.tox` is still not copied; see
+  [ui.tox](#uitox) for why that one is excluded even from this.
+- **`backups/` is gitignored.** It is a local scratch space, never committed,
+  and it sits in the checkout rather than anywhere off the disk — so it protects
+  against a wrong `apply`, not against losing the machine.
 
 ### The accepted value syntax
 
@@ -300,14 +333,16 @@ total overwrite, the same property the icon sets have and for the same reason.
 
 Three consequences worth knowing:
 
-- **It is not backed up.** Unlike the two stores and the icon set, `apply`
-  leaves no copy of the outgoing `ui.tox` in `backups/`. It is 1.1 MB, and the
-  only thing that ever writes it is `apply` itself, so a copy taken at apply
-  time is the previous theme's file - bytes that are already in git, in that
-  theme's own folder - and at one per apply it would grow `backups/` by
-  hundreds of megabytes. The stock file is recoverable from
-  `themes/default/ui.tox` and from `baseline/System/ui.tox`. **A hand-arranged
-  UI is not**, so keep it in a theme folder, which is where it came from.
+  - **It is not backed up, even with `--backup`.** `apply --backup` copies the
+    outgoing stores and icon set into `backups/`, and deliberately leaves this
+    file out. It is 1.1 MB, and the only thing that ever writes it is `apply`
+    itself, so a copy taken at apply time is the previous theme's file - bytes
+    that are already in git, in that theme's own folder - and at one per apply
+    it would grow `backups/` by hundreds of megabytes. A store pair is 32 KB
+    against that, so the flag is cheap for them and ruinous for this. The stock
+    file is recoverable from
+    `themes/default/ui.tox` and from `baseline/System/ui.tox`. **A hand-arranged
+    UI is not**, so keep it in a theme folder, which is where it came from.
 - **`--no-icons` does not skip it.** That flag is about the icon set. A theme
   switch that skipped the UI would leave the previous theme's geometry in place
   while reporting the new theme, which is the exact failure the fallback above
@@ -469,7 +504,7 @@ baseline/               captured pristine files + Icons/ + System/ui.tox
                         + version.json
 themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full
                         set), and optionally ui.tox
-backups/<timestamp>/    automatic, before every apply
+  backups/<timestamp>/    only with `apply --backup`; off by default, see below
 testiconsforagents/     PNG contact sheets written by `icons preview`
 tests/                  round-trip gate + library tests + icon tests
 tdthememaker/           the authoring tool: recipes, icon generation, export

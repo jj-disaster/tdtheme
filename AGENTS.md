@@ -45,6 +45,41 @@ loudly instead of writing quotes into a live install.
 unfixed code, because no committed overlay uses single quotes — the targeted
 probes are what actually catch it. Keep both kinds.
 
+## Backups are opt-in, and re-applying is the recovery path
+
+`apply` copies the outgoing stores and icons to `backups/<timestamp>/` only when
+given `--backup`. This is settled. Do not "restore" the old always-on default,
+and do not prune or add retention logic to `backups/` — there is nothing to
+prune once the default is off, and the flag is the whole mechanism.
+
+The install is a pure function of two committed inputs: the two stores hold
+`merge(baseline/, themes/<name>/)`, and the icon set holds the theme's own icons
+completed from `baseline/Icons/`. Both are in git, so `apply <the previous
+theme>` restores the outgoing bytes exactly, and `tdtheme status` names the
+theme to re-apply. Only `apply` writes those files (see `check-td-writes`),
+which is what makes "nothing else can have changed them" true rather than
+hopeful.
+
+That was measured, not assumed: a scratch script rebuilt a themed install from
+`baseline/` plus `themes/` and compared it against the real one — both stores
+and all 97 icons byte-identical. `tests/test_icons.py` keeps the weaker but
+permanent version of that fact.
+
+What a backup buys is the one input git does not have: a theme edited on disk
+and not yet committed. Keep `--backup` for that. Two costs that decided the
+default: a set runs 36 KB to 464 KB depending on how much the outgoing theme
+had changed, and `backups/` sat inside the checkout on the same disk as the
+files it duplicated, so it protected against a wrong `apply` and nothing else.
+
+`backups/` is gitignored (`.gitignore`). It is local scratch and is never
+committed.
+
+`result["backup"]` is `None` when the flag is absent, and `tdtheme apply` prints
+a line saying so plus what to do instead. That line is load-bearing: a missing
+line reads as "no backup was needed", which is the opposite of the reason the
+default is off. `tests/test_tdtheme.py` pins both the `None` and the absence of
+any new set under `backups/`.
+
 ## Other things that are settled
 
 - **`tdtiff.py` is the shared TIFF layer.** It is the leaf of the import graph
@@ -83,11 +118,20 @@ done is shipping a whole file and copying it over the top. A theme may carry
 
 Three choices here look like omissions and are not. Do not "fix" them.
 
-- **It is not backed up**, unlike the two stores and the icon set. It is 1.1 MB
-  and the only thing that ever writes it is `apply` itself, so a backup would
-  hold a copy of whichever theme was applied last - bytes that are already in
-  git, in that theme's own folder - at 1.1 MB per apply.
-  `tests/test_tdtheme.py` pins the absence, because it reads as an oversight.
+- **It is not backed up, not even by `--backup`.** It is 1.1 MB and the only
+  thing that ever writes it is `apply` itself, so a backup would hold a copy of
+  whichever theme was applied last - bytes that are already in git, in that
+  theme's own folder - at 1.1 MB per apply. This used to read "unlike the two
+  stores and the icon set", and it stopped being true when backups became
+  opt-in: those two are now copied only on request, and this one is excluded
+  from the request. The *reason* is the same one that made backups opt-in in
+  the first place, so the reasoning now runs in one direction rather than two.
+  The size is what makes this the strongest case rather than a merely
+  consistent one - a store pair is 32 KB - so `--backup` is a cheap request
+  for them and a ruinous one here.
+  `tests/test_tdtheme.py` pins the absence **and asserts the precondition that
+  the apply really did get a backup set**, because with backups off by default
+  the absence alone would pass on an empty `backups/` and prove nothing.
 - **A theme with no `ui.tox` falls back to `default`'s**, rather than writing
   nothing. Writing nothing leaves the *previous* theme's dialogs in place while
   `list` reports the new theme, which is the leak `default` prevents. The

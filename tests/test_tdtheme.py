@@ -840,10 +840,10 @@ THIRD_VALUE = ["0.9", "0.8", "0.7"]
     T.merge(colors_base, OrderedDict([("tile.connection.hilite1", THIRD_VALUE)])).to_bytes()
 )
 
-result = T.apply("probe")
+result = T.apply("probe", backup=True)
 check((install / T.TOUCHCOLORS).read_bytes() == T.merge(
     colors_base, sparse).to_bytes(), "apply writes the merged file")
-check(result["backup"].exists(), "apply creates a backup")
+check(result["backup"].exists(), "apply creates a backup when asked")
 check((result["backup"] / T.TOUCHCOLORS).exists(), "backup contains TouchColors")
 check((result["backup"] / T.TOUCHCOLORS).read_bytes()
       != (install / T.TOUCHCOLORS).read_bytes(),
@@ -851,6 +851,18 @@ check((result["backup"] / T.TOUCHCOLORS).read_bytes()
 check(T.load_file(result["backup"] / T.TOUCHCOLORS).get("tile.connection.hilite1")
       == THIRD_VALUE,
       "backup captures exactly the pre-apply state")
+
+# The default, which is the opposite of the above and just as load-bearing.
+# Backups are opt-in because the install is reconstructible from git, so an
+# ordinary apply must touch nothing under backups/ - and must say so, since a
+# line that went missing entirely would read as "none was needed".
+sets_before = set(T.backups_dir.glob("*"))
+plain = T.apply("probe")
+check(plain["backup"] is None, "apply reports no backup without --backup")
+check(set(T.backups_dir.glob("*")) == sets_before,
+      "apply without --backup adds nothing under backups/")
+check(plain["icons"]["backed_up"] == 0,
+      "and backs up no icons either, not just no stores")
 
 # Re-applying must be idempotent.
 before = (install / T.TOUCHCOLORS).read_bytes()
@@ -1006,10 +1018,11 @@ check(not second_reset["icons"]["written"]
       f"a second reset rewrites nothing "
       f"({len(second_reset['icons']['written'])} written)")
 
-# A reset that is not backed up is a blind overwrite, and this is the command
-# people reach for when something has already gone wrong.
+# `reset` is the command people reach for when something has already gone
+# wrong, so --backup has to reach it too. It is an alias, so this is really a
+# check that cmd_reset forwards the flag rather than dropping it on the floor.
 make_dirty()
-result = T.apply("default")
+result = T.apply("default", backup=True)
 backups = sorted(T.backups_dir.glob("*/" + T.TOUCHCOLORS))
 check(bool(backups) and backups[-1].read_bytes()
       == T.merge(colors_base, OrderedDict([("tile.connection.hilite1", THIRD_VALUE)])).to_bytes(),
@@ -1024,6 +1037,28 @@ check(code == 0 and (install_icons / DRIFTED_ICONS[0]).read_bytes() == b"not the
       "reset --no-icons resets the stores and leaves the icons alone")
 check((install / T.TOUCHCOLORS).read_bytes() == STOCK[T.TOUCHCOLORS],
       "reset --no-icons still returns the stores to the baseline")
+
+# The line itself, in both directions. This is the only thing telling a user
+# that no copy was kept, and a line that quietly disappeared would read as
+# "none was needed" - the opposite of why the default is off. So pin the
+# wording's two halves: that it says none, and that it names the way back.
+make_dirty()
+with contextlib.redirect_stdout(io.StringIO()) as no_backup_output:
+    code = tdtheme_cli.main(["reset"])
+check(code == 0, "reset without --backup succeeds")
+check("backup: none" in no_backup_output.getvalue(),
+      "the output says no backup was taken, rather than staying silent about it")
+check("tdtheme apply" in no_backup_output.getvalue(),
+      "and it names the way back, so the default does not read as a missing safety net")
+
+make_dirty()
+with contextlib.redirect_stdout(io.StringIO()) as backup_output:
+    code = tdtheme_cli.main(["reset", "--backup"])
+reported = [ln for ln in backup_output.getvalue().splitlines() if "backup:" in ln]
+check(code == 0 and reported and str(T.backups_dir) in reported[0],
+      f"with --backup the output names the set it wrote ({reported})")
+check("backup: none" not in backup_output.getvalue(),
+      "and does not also claim none was taken")
 
 # Put the install back to stock for the wrapper section that follows.
 T.apply("default")
@@ -1098,12 +1133,22 @@ with contextlib.redirect_stdout(io.StringIO()) as no_icons_output:
 check(install_tox.read_bytes() == default_tox.read_bytes(),
       "apply --no-icons still installs the ui.tox")
 
-# No backup, on purpose - see _apply_ui_tox. Pinned because a later reader would
-# otherwise read the omission as an oversight and "fix" it into 1.1 MB per
-# apply, when the outgoing file is already in git in its own theme's folder.
+# No backup for ui.tox, on purpose - see _apply_ui_tox. Pinned because a later
+# reader would otherwise read the omission as an oversight and "fix" it into
+# 1.1 MB per apply, when the outgoing file is already in git in its own theme's
+# folder. Backups are opt-in now, so this has to assert the precondition as
+# well: the absence only means something if an apply really did ask for one and
+# get a set. Otherwise it passes on an empty backups/, which proves nothing.
+tox_result = T.apply("uitest", backup=True)
+check(tox_result["backup"] is not None, "the ui.tox apply did get a backup set")
+check((tox_result["backup"] / T.TOUCHCOLORS).exists(),
+      "and that set does hold the stores")
+check(not (tox_result["backup"] / T.UI_TOX).exists()
+      and not (tox_result["backup"] / T.SYSTEM_DIRNAME / T.UI_TOX).exists(),
+      "ui.tox is left out even when --backup asks, unlike the stores and icons")
 check(not list(T.backups_dir.glob(f"*/{T.UI_TOX}"))
       and not list(T.backups_dir.glob(f"*/{T.SYSTEM_DIRNAME}/{T.UI_TOX}")),
-      "apply does not back up ui.tox, unlike the stores and the icon set")
+      "no apply leaked a ui.tox into backups/ under either path")
 
 # The CLI line. The two cases have to be distinguishable in the output, because
 # they install different dialog geometry and say the same thing otherwise.

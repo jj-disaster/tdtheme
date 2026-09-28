@@ -277,12 +277,13 @@ if mid.is_dir():
 section("Apply (temp install)")
 
 # Everything so far was pure computation. This is the part that has to work on
-# a real install: swap the icons in, put them back, and leave a backup.
+# a real install: swap the icons in, put them back, and leave a backup - the
+# last one only because this apply asks for it, which is the only way to get one.
 live_icons = install / T.ICONS_DIRNAME
 check(live_icons.is_dir() and len(tdicons.icon_names(live_icons)) == len(names),
       f"temp install seeded with all {len(names)} icons")
 
-result = T.apply("midnight")
+result = T.apply("midnight", backup=True)
 check(len(result["icons"]["written"]) == len(names),
       f"apply writes all {len(names)} icons "
       f"(wrote {len(result['icons']['written'])})")
@@ -333,17 +334,25 @@ partial.mkdir(parents=True, exist_ok=True)
 shutil.copytree(mid, partial / T.ICONS_DIRNAME)
 (partial / T.ICONS_DIRNAME / names[0]).unlink()
 findings = T.validate_icons("partial")
-shortfall = [f for f in findings if "filled in from the baseline" in f.message]
+# Selected by name and severity, not by a phrase in the message. This used to
+# match on "filled in from the baseline", and the two checks below then failed
+# the moment that sentence was reworded - which says nothing about partial sets
+# and everything about the test being coupled to prose. `partial` produces
+# exactly one icon finding, the shortfall, so that is the discriminator. If a
+# second kind of icon warning is ever added, narrow this to the shortfall rather
+# than loosening the count, or the "one aggregated finding" check below stops
+# meaning what it says.
+shortfall = [f for f in findings
+             if f.name == T.ICONS_DIRNAME and f.severity == "warning"]
 check(bool(shortfall),
       f"an incomplete icon set is reported (found {len(shortfall)})")
-check(all(f.severity == "warning" for f in shortfall),
-      "an incomplete icon set is a warning, not an error - the glyph still "
-      "renders, and the baseline now supplies it")
-# One finding for the whole shortfall, not one per absent icon. A theme
-# missing 94 of 97 used to print 94 identical lines.
 check(len(shortfall) == 1,
       f"the shortfall is one aggregated finding, not one per icon "
       f"(got {len(shortfall)})")
+check(not [f for f in findings
+           if f.name == T.ICONS_DIRNAME and f.severity == "error"],
+      "an incomplete icon set is a warning, not an error - the glyph still "
+      "renders, and the baseline now supplies it")
 
 # ------------------------------------------------- partial sets are completed
 #

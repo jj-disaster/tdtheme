@@ -963,11 +963,9 @@ def validate_icons(name: str) -> "list[IconFinding]":
     if missing:
         findings.append(IconFinding(
             "warning", ICONS_DIRNAME,
-            f"this theme ships {len(names)} of the baseline's {len(baseline_names)} "
+            f"this theme has {len(names)} of the baseline's {len(baseline_names)} "
             f"icons. The other {len(missing)} are filled in from the baseline at "
-            f"apply time, so the install still ends up complete and the missing "
-            f"glyphs will be the stock ones rather than the previous theme's. "
-            f"Regenerate the theme if a partial set is not what you meant."))
+            f"apply time."))
     return findings
 
 
@@ -1027,20 +1025,25 @@ def preview_icons(name, path=None, *, columns: int = 10, cell: int = 72):
     return destination
 
 
-def _apply_icon_set(name: str, backup_dir: Path) -> dict:
+def _apply_icon_set(name: str, backup_dir) -> dict:
     """Write a theme's icons into the install, backing up what it replaces.
 
     Anything the theme does not ship is filled from the baseline, not left as
     the previously applied theme left it. Both shipped themes and the fallback
     reach the same place: the install ends up holding a complete set, so it can
     never be holding a mixture of two themes while `status` reports one.
+
+    `backup_dir` is `None` when the caller did not ask for a backup, and
+    `tdicons.copy_icons` already reads `backup=None` as "back up nothing", so
+    the no-backup path needs no branch here.
     """
     theme = theme_icons_dir(name)
     if not theme.is_dir():
         return {"applied": False, "reason": f"{name} has no icon directory",
                 "written": [], "unchanged": [], "filled": [], "backed_up": 0}
     result = tdicons.copy_icons(theme, icons_dir(),
-                                backup=backup_dir / ICONS_DIRNAME,
+                                backup=None if backup_dir is None
+                                else backup_dir / ICONS_DIRNAME,
                                 only_changed_against=baseline_icons_dir(),
                                 fill_from=baseline_icons_dir())
     result["applied"] = True
@@ -1050,13 +1053,22 @@ def _apply_icon_set(name: str, backup_dir: Path) -> dict:
 def _apply_ui_tox(name: str) -> dict:
     """Install a theme's `ui.tox`, or `default`'s, over the one in the install.
 
-    No backup, and that is a deliberate departure from the two stores and the
-    icon set. `ui.tox` is 1.1 MB and the only thing that ever writes it is
-    `apply` itself - TouchDesigner reads it and never writes it, and a manual
-    export lands wherever the user saved it rather than over the install's copy.
-    So a backup taken at apply time is the outgoing theme's file, which is
-    already in git in that theme's own folder, and at one per apply it would
-    multiply out to hundreds of megabytes of bytes this repository already has.
+    Not backed up even when `--backup` is given, and that is deliberate rather
+    than an oversight. `ui.tox` is 1.1 MB and the only thing that ever writes
+    it is `apply` itself - TouchDesigner reads it and never writes it, and a
+    manual export lands wherever the user saved it rather than over the
+    install's copy. So a backup taken at apply time is the outgoing theme's
+    file, which is already in git in that theme's own folder, and at one per
+    apply it would multiply out to hundreds of megabytes of bytes this
+    repository already has.
+
+    The stores and the icon set are backed up only on request, for the same
+    "already in git" reason, so the departure is narrower than it was: it used
+    to be "the stores and icons are always backed up and this is not", and it
+    is now "this one is excluded even from the opt-in backup". The size is
+    what makes `ui.tox` the strongest case rather than a merely consistent
+    one - a store pair is 32 KB against 1.1 MB, so `--backup` is a cheap
+    request there and an expensive one here.
 
     The write goes through `write_file`, so it is atomic and creates
     `Config/System/` if it is somehow absent. Overwriting unconditionally is
@@ -1082,8 +1094,23 @@ def plan(name: str) -> "dict[str, TdFile]":
     return {"files": merged, "findings": findings, "icon_findings": validate_icons(name)}
 
 
-def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
-    """Merge, validate, back up, and write. Refuses on validation errors."""
+def apply(name: str, *, force: bool = False, icons: bool = True,
+          backup: bool = False) -> dict:
+    """Merge, validate, and write. Refuses on validation errors.
+
+    `backup` first copies the outgoing stores and icons into
+    `backups/<timestamp>/`. It is off by default, and the reason is that the
+    install is reconstructible without it: the two stores only ever hold
+    `merge(baseline, theme)` and the icon set only ever holds a theme's set
+    completed from the baseline, so both inputs are in git and
+    `apply <the previous theme>` reproduces the outgoing bytes exactly.
+
+    What a backup actually adds is cover for the one input git does not have -
+    a theme edited on disk and not committed - and it is not free, because a
+    set runs 36 KB to 464 KB depending on how much of the install the outgoing
+    theme had changed, and nothing ever pruned `backups/`. So it is a flag
+    rather than a default, and `result["backup"]` is `None` when it is off.
+    """
     result = plan(name)
     findings = result["findings"]
     icon_findings = result["icon_findings"]
@@ -1105,17 +1132,18 @@ def apply(name: str, *, force: bool = False, icons: bool = True) -> dict:
     if running:
         warnings.append(
             f"TouchDesigner is running (pid {', '.join(map(str, running))}). "
-            f"It reads these files at startup, so it will keep showing the "
-            f"current appearance until you restart it."
+            f"Restart to see changes"
         )
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = backups_dir / stamp
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    for store in STORE_FILES:
-        installed = cfg / store
-        if installed.exists():
-            shutil.copy2(installed, backup_dir / store)
+    backup_dir = None
+    if backup:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_dir = backups_dir / stamp
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for store in STORE_FILES:
+            installed = cfg / store
+            if installed.exists():
+                shutil.copy2(installed, backup_dir / store)
 
     for store in STORE_FILES:
         write_file(cfg / store, result["files"][store].to_bytes())

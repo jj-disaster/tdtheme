@@ -136,7 +136,8 @@ def cmd_diff(args) -> int:
 
 def cmd_apply(args) -> int:
     try:
-        result = T.apply(args.name, force=args.force, icons=not args.no_icons)
+        result = T.apply(args.name, force=args.force, icons=not args.no_icons,
+                         backup=args.backup)
     except T.ValidationError as exc:
         print(f"Not applied: {exc}", file=sys.stderr)
         _finding_lines(exc.findings)
@@ -177,7 +178,14 @@ def cmd_apply(args) -> int:
     if args.force and errors:
         print(f"\n    {len(errors)} error(s) forced through:")
         _finding_lines(errors)
-    print(f"\n    backup: {result['backup']}")
+    if result["backup"] is not None:
+        print(f"\n    backup: {result['backup']}")
+    else:
+        # Say what happened and what to do instead, rather than printing
+        # nothing. A missing line here reads as "no backup was needed", and
+        # the whole point of making this opt-in is that the substitute exists.
+        print("\n    backup: none (every applied theme is in git, so "
+              "`tdtheme apply <the previous one>` puts this back)")
     if not result["td_running"]:
         print("    TouchDesigner is closed; changes are live on next launch.")
     return EXIT_OK
@@ -387,6 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write even if validation errors are present")
     p.add_argument("--no-icons", action="store_true",
                    help="apply colours and options only, leaving the icon set alone")
+    p.add_argument("--backup", action="store_true",
+                   help="copy the outgoing stores and icons into backups/ first; "
+                        "off by default because re-applying a theme restores them")
     p.set_defaults(func=cmd_apply)
 
     p = sub.add_parser("reset", help="restore the stock look (an alias for 'apply default')")
@@ -394,6 +405,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write even if validation errors are present")
     p.add_argument("--no-icons", action="store_true",
                    help="reset colours and options only, leaving the icon set alone")
+    p.add_argument("--backup", action="store_true",
+                   help="copy the outgoing stores and icons into backups/ first; "
+                        "off by default because re-applying a theme restores them")
     p.set_defaults(func=cmd_reset)
 
     icons = sub.add_parser("icons", help="inspect and rebuild icon sets")
