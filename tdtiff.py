@@ -594,7 +594,7 @@ def pixel_diff(baseline, other) -> "dict[str, str]":
     always a different file from the shipped one - single-strip, explicitly straight
     alpha, stripped of ~5 KB of Photoshop metadata - so a byte diff reports all 97
     files changed even when the recipe did nothing. For `mono`, pure `grayscale`,
-    79 of 97 come out pixel-for-pixel identical while every one differs in bytes.
+    58 of 97 come out pixel-for-pixel identical while every one differs in bytes.
 
     Decoding is the expensive part (~0.4s for a 97-icon set in pure Python), so this
     is not on `tdtheme list`'s path; it belongs where someone has asked whether a

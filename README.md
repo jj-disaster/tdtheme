@@ -188,6 +188,13 @@ overwrite is the only model where switching
 themes cannot leak state. The cost is disk - 1.31 MB across the seven shipped
 sets, against a few KB for a delta scheme - and that was an accepted trade.
 
+That 1.31 MB is 1 368 702 B, of which 782 520 B is `default` alone, because it
+copies the baseline verbatim. The six regenerated sets are 101-128 KB each
+rather than that 782 KB stock set, since re-encoding drops ~5 KB of Photoshop
+metadata per icon and re-applies LZW - so the bulk of the total is the one
+theme that changes nothing. The recipes those sets were generated from are
+18 150 B in all.
+
 A theme that is *not* complete is still safe. Anything it does not ship is
 filled in from the baseline at apply time, so a partial set - an interrupted
 copy, or a folder assembled by hand - gives you that theme's glyphs on top of
@@ -220,6 +227,28 @@ error, because a silently skipped line means a subtly wrong icon set.
 `default` uses an **empty** `ops` list, which means *copy the baseline files
 byte for byte* rather than decode and re-encode. That is what makes a reset
 lossless.
+
+| theme | recipe | `Icons/` | recipe ÷ set | icons actually repainted |
+|---|---:|---:|---:|---:|
+| `default` | 662 B | 782 520 B | 0.1% | 0 / 97 |
+| `defaultnowarn` | 1 611 B | 1 354 B | 119% | 1 / 1 shipped |
+| `midnight` | 2 576 B | 127 946 B | 2.0% | 94 / 97 |
+| `sunset` | 1 680 B | 127 566 B | 1.3% | 94 / 97 |
+| `mono` | 1 563 B | 106 152 B | 1.5% | 39 / 97 |
+| `bnw` | 2 162 B | 101 363 B | 2.1% | 46 / 97 |
+| `pink` | 7 896 B | 121 801 B | 6.5% | 94 / 97 |
+| **all seven** | **18 150 B** | **1 368 702 B** | **1.3%** | |
+
+The last column is `tdtheme icons diff`, which decodes and compares pixels; the
+byte columns are `du`. Every theme ships all 97 files except `defaultnowarn`,
+which ships one, and an earlier version of
+[the icon-storage design](docs/icon-storage-design.md) reported 97/97 for the
+middle four rows by counting icons *shipped* instead of icons *changed*.
+
+`defaultnowarn` is the one row whose recipe is bigger than the set it produces:
+it is a single hand-placed icon with an empty `ops` list, so the recipe is
+documentation. It is also the clearest argument that a sparse *storage* model
+was worth building.
 
 ```
 ./tdtheme icons diff mono           # by pixel - which icons are actually repainted
@@ -448,21 +477,36 @@ The correct model, now measured rather than assumed:
   *look*, because the process-cached bitmap wins.
 
 The practical consequence: there is no reason to quit TouchDesigner before
-applying a theme. Re-run `./check-td-writes` after any future TouchDesigner
-update to confirm this still holds for that build.
+applying a theme. The measurement is per-build, so re-run
+`./check-td-writes` after any future TouchDesigner update:
+
+```sh
+./check-td-writes record   # before launching TouchDesigner
+# ... launch TD, use it, quit it ...
+./check-td-writes check    # reports whether any of the three changed
+```
+
+It tracks all three artefacts; the `Icons` directory is hashed as one blob
+rather than listed file by file, since the only question is whether the set
+changed. `tdtheme` assumes TouchDesigner never writes these files and does not
+warn about data loss. The tool itself re-checks the baseline build number on
+every `status`.
+
+**`ui.tox` is not among the three, and that omission is deliberate rather than
+an oversight.** TouchDesigner **never writes** this file: it reads it at startup,
+and the only way a new `ui.tox` comes into existence is a manual export, which
+lands wherever the user saved it rather than over the one in the install folder.
+So `apply` does not need re-running after a session — nothing in the install
+can have moved underneath it — and a theme's `ui.tox` is the layout you get at
+launch, full stop. It is absent here because there is nothing to check, not
+because the answer is unknown: the other three were measured to be read-only
+and this one is read-only by construction.
 
 ## Known limitations
 
-- **Icon storage is wasteful by design.** The seven shipped sets come to 1.31 MB
-  where a delta scheme would be a few KB. A complete set per theme is what makes
-  `apply` a total overwrite and `default` a lossless reset; sharing or
-  deduplicating the unchanged icons would reintroduce the leak that design
-  avoids. The regenerated sets are 97-128 KB each rather than the stock
-  764 KB, because re-encoding drops the Photoshop metadata and re-applies LZW -
-  the bulk of the 1.31 MB is `default`, which copies the baseline verbatim. A
-  partial set no longer leaks the previous theme's icons, so this is a storage
-  trade rather than a correctness one - but storage is still the honest reason
-  the sets are duplicated.
+- **Icon storage is wasteful by design.** Seven shipped sets come to 1.31 MB
+  where a delta scheme would be a few KB — a storage trade, not a correctness
+  one, and the full accounting is under [Icons](#icons).
 - **The TIFF codec handles only what TouchDesigner ships**: little-endian
   classic TIFF, single page, 8 bits per sample, photometric RGB, LZW or
   uncompressed, 3 or 4 samples. Big-endian, planar, 16-bit and palette images
@@ -564,35 +608,6 @@ TouchDesigner config. `test_icons.py` additionally cross-checks the codec
 against `sips`, so a systematic misreading of the TIFF format cannot pass by
 agreeing with itself.
 
-### Re-checking the read-only assumption
-
-The claim that TouchDesigner only ever reads these files was originally
-measured by hand, and the evidence is in "Confirmed" above. `./check-td-writes`
-is the helper for redoing it on a new build:
-
-```sh
-./check-td-writes record   # before launching TouchDesigner
-# ... launch TD, use it, quit it ...
-./check-td-writes check    # reports whether any of the three changed
-```
-
-It tracks all three artefacts; the `Icons` directory is hashed as one blob
-rather than listed file by file, since the only question is whether the set
-changed. `tdtheme` assumes TouchDesigner never writes these files and does not
-warn about data loss. That assumption was measured, not guessed - but it is
-per-build, so re-run this after a TouchDesigner update. The tool itself
-re-checks the baseline build number on every `status`.
-
-**`ui.tox` is not among them, and that omission is deliberate rather than an
-oversight.** TouchDesigner **never writes** this file: it reads it at startup,
-and the only way a new `ui.tox` comes into existence is a manual export, which
-lands wherever the user saved it rather than over the one in the install folder.
-So `apply` does not need re-running after a session — nothing in the install
-can have moved underneath it — and a theme's `ui.tox` is the layout you get at
-launch, full stop. It is absent here because there is nothing to check, not
-because the answer is unknown: the other three were measured to be read-only
-and this one is read-only by construction.
-
 The tool has **no third-party dependencies**. It uses PyYAML when
 importable (TouchDesigner bundles 6.0.3) and otherwise falls back to a
 loader covering the exact YAML subset it emits. The icon work kept that rule:
@@ -615,7 +630,8 @@ above is the thing to read first.
   TIFF alpha convention (`ExtraSamples` and premultiplication), which the
   README summarises and the code implements.
 - **[docs/icon-storage-design.md](docs/icon-storage-design.md)** — **a design
-  note for work that was not done.** It proposes storing icon sets sparsely
-  instead of shipping all 97 files per theme, and records the measurements
-  behind the idea. Nothing in it is built. Where it disagrees with the code,
-  the code is the current behaviour.
+  note, partly implemented.** It proposes storing icon sets sparsely instead of
+  shipping all 97 files per theme, and records the measurements behind the idea.
+  Step 1 is built: a theme may ship a subset, and `tdicons.copy_icons` fills
+  the rest from the baseline. Steps 2–5 are still a proposal. Where it
+  disagrees with the code, the code is the current behaviour.

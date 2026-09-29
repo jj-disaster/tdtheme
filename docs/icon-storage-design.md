@@ -42,40 +42,17 @@ in this document are written as `tdthememaker/recipes/<name>.recipe.json`.
 
 ## 1. The analogy holds, but only halfway
 
-The two stores really are sparse overlays, and sparsely for a measured reason.
-A theme authors only the keys it changes; everything else falls through to the
-captured baseline, and an absent key means *reset to baseline* because
-`merge()` starts from the baseline rather than from the install.
+The two stores really are sparse overlays: a theme authors only the keys it
+changes, everything else falls through to the captured baseline, and an absent
+key means *reset to baseline* because `merge()` starts from the baseline rather
+than from the install. `midnight` authors 20 of 626 `TouchColors` keys,
+`sunset` 17, `mono` 460, `bnw` 419.
 
-| theme | TouchColors keys authored | of total |
-|---|---|---|
-| `midnight` | 20 | 626 |
-| `sunset` | 17 | 626 |
-| `mono` | 460 | 626 |
-| `bnw` | 419 | 626 |
-
-**Icons do not have that property.** Every regenerated theme repaints almost
-all 97 glyphs, and `defaultnowarn` repaints the single one it still ships:
-
-| theme | recipe | `Icons/` | ratio | icons changed |
-|---|---|---|---|---|
-| `default` | 662 B | 782 520 B | 1182× | 0 / 97 |
-| `defaultnowarn` | 1 611 B | 1 354 B | 0.8× | 1 / 97 |
-| `midnight` | 2 576 B | 127 946 B | 50× | 97 / 97 |
-| `sunset` | 1 680 B | 127 566 B | 76× | 97 / 97 |
-| `mono` | 1 563 B | 106 152 B | 68× | 97 / 97 |
-| `bnw` | 2 162 B | 101 363 B | 47× | 97 / 97 |
-| `pink` | 7 896 B | 121 801 B | 15× | 94 / 97 |
-
-`defaultnowarn`'s ratio is below 1 because it now ships one icon: its recipe is
-larger than the set it produces, which is the clearest single illustration of
-why a sparse *storage* model was worth building.
-
-So a per-icon sparse overlay in the `TouchColors.yaml` mould — one line per
-changed glyph, absent meaning baseline — would store exactly as much as the
-current complete set for `midnight`, `sunset`, `mono` and `bnw`. It would only
-shrink `default` and `defaultnowarn`, the two themes nobody themes with,
-because they are the only ones that change nothing.
+**Icons do not have that property.** The per-theme measurements are in the
+[Icons section of the README](../README.md#icons): 18 150 B of recipes against
+1 368 702 B of committed TIFFs, and every theme with a real recipe repainting
+39-94 of the 97 glyphs. The conclusion the measurements force is the one that
+still matters here:
 
 **The premise of the request does not survive contact with the data.** Icon
 theming is wholesale recolouring, not sparse key patching. That is not an
@@ -96,34 +73,25 @@ It is sparse in the same way the key overlays are — `match` globs rather than 
 literal names — it carries a long `_comment` explaining the design, and
 `"ops": []` gives the reset identity for free, exactly as
 `merge(baseline, {}) == baseline` does for the stores. `default`'s reset is
-already correct and already byte-exact.
-
-It is also 15–1182× smaller than the binaries it produces. Across all seven
-themes: **18 150 B of recipe versus 1 368 702 B of committed TIFFs.**
-
-An icon that matches no op is copied from the baseline verbatim, so the recipe
-already has the "absent means baseline" semantics too. Measured: a recipe whose
-only op is `{"match": "CommentOff", "op": "tint", …}` reports 1 transformed and
+already correct and already byte-exact. An icon that matches no op is copied
+from the baseline verbatim, so the recipe already has the "absent means
+baseline" semantics too. Measured: a recipe whose only op is
+`{"match": "CommentOff", "op": "tint", …}` reports 1 transformed and
 96 pixel-identical; an empty recipe reports 0 and 97. The only thing missing is
 the *other* representation.
 
-### Two authoring footguns, since the recipe would become the source of truth
+### Two authoring footguns
 
-Both verified, both silent, both worth fixing before the recipe is the only
-thing a reviewer reads:
-
-- **`match` is applied to the stem, not the filename.** The extension is
-  stripped before matching, so `{"match": "Cook.tiff"}` matches **nothing** and
-  reports success. The correct spelling is `{"match": "Cook"}`. A theme author
-  who reaches for the filename gets a silently empty op.
-- **A recolour op on a black-ink glyph is a no-op.** `tint` maps a pixel to
-  `colour × luma`, and black has zero luminance, so
-  `{"match": "Cook", "op": "tint", "color": [122, 226, 168]}` reports
-  `transformed=1` and changes nothing at all. Three of the 97 shipped icons have
-  black ink (`CommentOffSmall`, `Cook`, `Grid`, per the recipe comments), so
-  this is reachable from real themes — `bnw` and `mono` are built on recolouring
-  neutral ink and would silently miss them.
-
+**`match` is applied to the stem, not the filename** (`tdthememaker/icons.py`
+strips the extension and matches the stem, with no rejection of a selector that
+carries one), and **a recolour op on a black-ink glyph is a silent no-op**
+(`apply_recipe` reports `transformed`/`pixel_identical` without a warning that
+an op changed nothing). Both are still true, both are still unfixed, and both
+are written up for the recipe author in
+[`tdthememaker/README.md`](../tdthememaker/README.md#recipes) — "Two things to
+know before writing one", under **Recipes**. That is where they belong now that
+the recipe is the source of truth; §5 step 5 is the reminder that they are
+still open.
 
 This is the same split the key stores already have: `capture` writes the
 resolved full form to `baseline/`, and the diff describes the theme as an
@@ -133,29 +101,21 @@ the same overlay, so the parallel holds.)
 
 ## 3. The constraint that must survive
 
-`docs/reverse-engineering.md` records why every theme ships all 97 files, and
-the reason is about **materialisation, not storage**:
+The constraint is about **materialisation, not storage**, and it is stated in
+[reverse-engineering.md §5](reverse-engineering.md), under "Why every theme
+ships all 97 files": because `UI_Icon` looks icons up by name, a theme with a
+*partial* set would leave every missing glyph rendering with whatever the
+previously applied theme left in the install, there is no fallback to the stock
+file, and a complete overwrite is the only model in which switching themes
+cannot leak state.
 
-> Because `UI_Icon` looks icons up by name, a theme with a *partial* set would
-> leave every missing glyph rendering with whatever the previously applied theme
-> left in the install. There is no fallback to the stock file. A complete
-> overwrite is the only model in which switching themes cannot leak state.
-
-This is the load-bearing constraint, and it is unaffected by where the bytes
-live. It says the *install* must end up with a decision for all 97 names every
-time. It does not say the *theme* has to carry all 97 files.
-
-Sparse storage and total materialisation are compatible:
-
-```
-for name in the 97 baseline icon names:
-    install[name] = theme/Icons/name  if the theme has it
-                    baseline/Icons/name  otherwise
-```
-
-Every name is always written, so switching themes still cannot leak state, and
-`apply` is still idempotent and order-independent. The only difference is where
-the bytes were read from.
+That is load-bearing and unaffected by where the bytes live. It says the
+*install* must end up with a decision for all 97 names every time. It does not
+say the *theme* has to carry all 97 files. Sparse storage and total
+materialisation are compatible — every name is written, from the theme if it
+has it and from the baseline otherwise — and the only difference is where the
+bytes were read from. That is now implemented, as `tdicons.copy_icons` with
+`fill_from=`; the pseudocode this section used to carry is that function.
 
 Two further facts constrain any change here:
 

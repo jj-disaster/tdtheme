@@ -102,8 +102,17 @@ The line still prints when `--backup` is given, and it names the set it wrote.
 - **Every name in an `__all__` must resolve.** After deleting a symbol, a stale
   `__all__` entry makes `from tdicons import *` raise `AttributeError`, which no
   other test catches. Verify by importing each module and resolving `__all__`.
-- **`docs/icon-storage-design.md` is an unimplemented proposal**, deliberately.
-  It is not a description of current behaviour. Do not "fix" code to match it.
+- **`docs/icon-storage-design.md` is a proposal, and step 1 of it shipped.**
+  It is not a description of current behaviour; do not "fix" code to match
+  steps 2-5. Step 1 - a theme may hold a *subset*, with the baseline supplying
+  the rest - is built, and is load-bearing rather than speculative:
+  `copy_icons` takes `fill_from=baseline_icons_dir()` and `defaultnowarn` ships
+  one icon. So "nothing in that document is built" was wrong, and the document's
+  own status preamble now says so, citing the four commits. What is still only
+  proposed: materialise on demand, untrack the committed TIFFs, a
+  recipe-writing importer, and the two `match`/recolour footguns. One of those
+  steps was written as "stop treating a missing icon as a warning" and **did not
+  happen** - the direction went the other way, and the warning is deliberate.
 - **A theme ships all 97 icons, and `apply` fills the rest from the baseline.**
   Six of the seven themes ship all 97, but `defaultnowarn` ships exactly one -
   `WarnFace.tiff`, 1,354 B - and leans on the fill for the other 96, so the
