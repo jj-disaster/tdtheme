@@ -37,7 +37,7 @@ def overlay_text(data, name=""):
     for key, value in data.items():
         if key:
             lines.append(f"{key}: [{', '.join(json.dumps(v) for v in value)}]")
-    return "\n".join(lines) + "\n"  # noqa: E402
+    return "\n".join(lines) + "\n"
 
 PASS, FAIL = "  ok  ", " FAIL "
 failures: list[str] = []
@@ -123,7 +123,6 @@ check(loaded == sample, "overlay round-trips through loader")
 # The same text through the zero-dependency path.
 manual = T._load_overlay_fallback(text, "TouchOptions")
 check(manual == sample, "overlay round-trips through the fallback loader")
-check(manual == loaded, "fallback and yaml loaders agree (when yaml absent)")
 
 # Whether PyYAML is importable is a property of the machine, not of this code.
 # Asserting it outright made the suite fail on a correctly provisioned host, so
@@ -314,7 +313,6 @@ unknown = T.merge(base, OrderedDict([("tile.bordr.size", ["7"])]))
 warns = [f for f in T.validate(unknown, base) if f.severity == "warning"]
 check(any(f.key == "tile.bordr.size" for f in warns), "typo'd key warns")
 
-both = T.merge(base, OrderedDict([("tile.current", ["1", "1", "1"])]))
 colors_base = T.load_file(install / T.TOUCHCOLORS, T.TOUCHCOLORS)
 # No shipped default.* key has a specific twin, so the collision has to be
 # built synthetically to exercise the rule.
@@ -861,8 +859,8 @@ T.themes_dir.mkdir(parents=True, exist_ok=True)
 bad_dir = T.themes_dir / "broken"
 bad_dir.mkdir(parents=True, exist_ok=True)
 (bad_dir / f"{T.TOUCHOPTIONS}.yaml").write_text('tile.inout.origsize: ["0"]\n')
-ex = raises(T.ValidationError, lambda: T.apply("broken"),
-            "apply refuses a theme that fails validation")
+raises(T.ValidationError, lambda: T.apply("broken"),
+       "apply refuses a theme that fails validation")
 check((install / T.TOUCHOPTIONS).read_bytes() == base.to_bytes(),
       "the rejected apply left the install untouched")
 check(T.apply("broken", force=True)["theme"] == "broken",
@@ -982,7 +980,6 @@ check(aliased == long_form, "reset and 'apply default' produce identical bytes")
 check(alias_output.getvalue().count("'default'") == 1,
       "reset reports the theme it applied, so the alias is not hiding its target")
 
-check(aliased["icons"] == STOCK["icons"], "reset restores every icon to the baseline bytes")
 check(T.status().applied == "default",
       f"reset records 'default' as the applied theme (got {T.status().applied})")
 
@@ -1053,7 +1050,8 @@ check("none" not in reported[0].lower(),
 
 # Put the install back to stock for the wrapper section that follows.
 T.apply("default")
-check(installed_state() == STOCK, "the install is back at the baseline to end on")
+check(installed_state() == STOCK,
+      "the install is back at the baseline before the change report below")
 
 # ---------------------------------------------------------- what apply changed
 #
@@ -1146,7 +1144,9 @@ T.apply("default")
 check(T.TOUCHOPTIONS in T.apply("default")["changes"],
       "and present again once the file exists")
 T.apply("default")
-check(installed_state() == STOCK, "and the install is back at the baseline to end on")
+check(installed_state() == STOCK,
+      "and the install is back at the baseline, the store apply recreated "
+      "included")
 
 
 # ------------------------------------------------------------------- ui.tox

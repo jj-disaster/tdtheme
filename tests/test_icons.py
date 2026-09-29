@@ -333,14 +333,23 @@ T.apply("default")
 # Re-applying must be idempotent, icons included. Compared against the themed
 # state, not the stock one - the point is that a second midnight apply is a
 # no-op, not that it reproduces the baseline.
+#
+# Byte equality cannot see *whether* a file was rewritten, so the count is a
+# second claim, not a restatement. The `only_changed_against` short-circuit
+# compares each icon against the *baseline*, so it fires for `default` - whose
+# bytes are the baseline's - and for nothing else: re-applying a themed set
+# rewrites all 97 with the same bytes over the top. Pinning the number is what
+# makes that visible, and a count is what the apply path reports, so it is also
+# the number the user is shown.
 T.apply("midnight")
 before = {n: (live_icons / n).read_bytes() for n in names}
 again = T.apply("midnight")
 check({n: (live_icons / n).read_bytes() for n in names} == before,
       "apply is idempotent for icons")
-check(len(again["icons"]["written"]) == 0
-      or all(again["icons"]["written"]),
-      "a second identical apply rewrites nothing or writes the same bytes")
+check(sorted(again["icons"]["written"]) == names and not again["icons"]["unchanged"],
+      f"a second identical apply rewrites all {len(names)} of them, same bytes "
+      f"over the top ({len(again['icons']['written'])} written, "
+      f"{len(again['icons']['unchanged'])} unchanged)")
 T.apply("default")
 
 # A theme whose icon set is missing a file must be caught, because the missing

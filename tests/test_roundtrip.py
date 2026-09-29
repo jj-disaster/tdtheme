@@ -74,18 +74,16 @@ print("Parser edge cases")
 print("-" * 60)
 
 cases = [
-    ("plain colour", b"a.b\t1\t0\t0\r\n", True),
-    ("extra empty field", b"a.b\t\t0.2\t0.2\t0.2\r\n", True),
-    ("many empty fields", b"a.b\t\t\t\t1\t2\t3\r\n", True),
-    ("empty option value", b"font.face\t\r\n", True),
-    ("no trailing newline", b"a.b\t1\t0\t0", False),
-    ("bare LF", b"a.b\t1\t0\t0\n", False),
-    ("no trailing newline, bare LF", b"a.b\t1\t0\t0", False),
-    ("empty file", b"", False),
-    ("single line no NL", b"a.b\t1\t0\t0", False),
-    ("blank line preserved", b"a.b\t1\t0\t0\r\n\r\nc.d\t0\t1\t0\r\n", True),
+    ("plain colour", b"a.b\t1\t0\t0\r\n"),
+    ("extra empty field", b"a.b\t\t0.2\t0.2\t0.2\r\n"),
+    ("many empty fields", b"a.b\t\t\t\t1\t2\t3\r\n"),
+    ("empty option value", b"font.face\t\r\n"),
+    ("no trailing newline", b"a.b\t1\t0\t0"),
+    ("bare LF", b"a.b\t1\t0\t0\n"),
+    ("empty file", b""),
+    ("blank line preserved", b"a.b\t1\t0\t0\r\n\r\nc.d\t0\t1\t0\r\n"),
 ]
-for label, raw, expected_trailing in cases:
+for label, raw in cases:
     parsed = TdFile.parse(raw, "TouchColors")
     check(parsed.to_bytes() == raw, f"edge: {label}")
 

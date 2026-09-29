@@ -334,9 +334,13 @@ check({n[:-5] for n in lying} == MISLABELLED,
       f"contain straight data (found {len(lying)})")
 check(all(honest),
       "every icon that does not contradict the tag is genuinely premultiplied")
-check(len(lying) + len(honest) + len(opaque_only) == len(names),
-      f"the remaining {len(opaque_only)} icons have no partial alpha to judge "
-      f"and are undecidable either way")
+# The third list is reported, not checked. Every icon lands in exactly one of the
+# three, so the sum equalled len(names) by construction and the check restated
+# the shape of the if/elif/else above it. The size of the undecidable
+# population is the part worth knowing - the two checks here judge the other
+# names, and a reader has no other way to learn that these were left out.
+print(f"         ({len(opaque_only)} of {len(names)} icons carry no partial "
+      f"alpha, so their alpha tag is undecidable either way)")
 
 # The payoff: those 23 keep their edge ramp instead of turning white.
 clamped_before = kept_after = 0
@@ -613,8 +617,11 @@ for op_name, kwargs in (("grayscale", {"amount": 1.0}),
           f"op {op_name!r} leaves the alpha channel untouched")
     check(out.size == probe_img.size, f"op {op_name!r} preserves the dimensions")
 
-# grayscale is what `mono` is built on, so assert the property the theme's own
-# comment claims: the output is grey, and it is that pixel's own luminance.
+# grayscale is what `mono` is built on, so assert the property the check below
+# states: every output pixel is grey. What the theme's own comment also claims -
+# that the grey is that pixel's own luminance - is not asserted here, and
+# `r == g == b` cannot see it: a greyscale ramp is a ramp whatever value it maps
+# to, so the claim needs a comparison against the input.
 grey = icons._run_op(probe_img, {"op": "grayscale", "amount": 1.0})
 not_grey = [i for i in range(0, len(grey.pixels), 4)
             if not (grey.pixels[i] == grey.pixels[i + 1] == grey.pixels[i + 2])]
@@ -807,8 +814,18 @@ for theme in THEMES:
         continue
     check(rep["written"] == len(names),
           f"{theme}: rebuild writes all {len(names)} icons")
-    check(all(icons.read_tiff((out / n).read_bytes()) is not None for n in names),
-          f"{theme}: every rebuilt icon decodes")
+    # Collected, not `read_tiff(...) is not None`: the reader returns a TiffImage
+    # or raises, so the predicate could not fail and an undecodable icon took the
+    # whole suite down with a traceback instead of failing a check. See the note
+    # at the top of this file - both other sites used to say that too.
+    undecodable = []
+    for n in names:
+        try:
+            icons.read_tiff((out / n).read_bytes())
+        except icons.IconError as exc:
+            undecodable.append(f"{n}: {exc}")
+    check(not undecodable,
+          f"{theme}: every rebuilt icon decodes (failures: {undecodable[:2]})")
     print(f"         ({rep['written'] - rep['pixel_identical_to_baseline']} of "
           f"{rep['written']} changed pixels)")
 
@@ -1016,7 +1033,7 @@ shutil.rmtree(export_tmp, ignore_errors=True)
 # paths above are all redirected, and this catches a new one being added.
 check(sorted(p.name for p in (ROOT / "themes").iterdir() if p.is_dir())
       == sorted(THEMES),
-      "the real themes directory is exactly the six committed themes")
+      f"the real themes directory is exactly the {len(THEMES)} committed themes")
 check((applied_marker.read_bytes() if applied_marker.exists() else None)
       == marker_before,
       "the real last-applied marker is exactly as it was before this suite")
