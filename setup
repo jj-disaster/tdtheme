@@ -469,8 +469,10 @@ if [ "$FAILURES" -eq 0 ]; then
     say "    tdtheme status          # check the install"
     say "    tdtheme list            # see the themes"
     say "    tdtheme apply midnight  # try one"
+    say "    tdtheme update          # pull changes from GitHub"
     say ""
-    say "Undo with: ./setup --uninstall"
+    say "Remove with: tdtheme uninstall   (restores stock, keeps your themes)"
+    say "         or: ./setup --uninstall   (the links only)"
     exit 0
 fi
 

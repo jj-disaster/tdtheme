@@ -244,6 +244,44 @@ function of the baseline and the theme, both in git, so re-applying the previous
 theme restores the exact bytes. See
 [Undo is re-applying, not restoring](#undo-is-re-applying-not-restoring).
 
+### Keeping it up to date
+
+```sh
+tdtheme update
+```
+
+A `git pull` of this checkout, and it **refuses** in two cases rather than
+guessing:
+
+- **Uncommitted changes.** A theme you are editing on disk is invisible to git,
+  so a pull that overwrites it loses work no `reflog` can bring back. It lists
+  what is modified and stops. `git stash` sets it aside.
+- **A diverged branch.** If your commits and upstream's have both moved on there
+  is no fast-forward, and this will not invent a merge commit for you. It prints
+  the `git log --left-right` you want and stops.
+
+It only ever fast-forwards, so it never creates a commit you did not ask for.
+
+An update does not change what is installed. A new upstream theme is a new
+theme: it is not on your machine until you `apply` it.
+
+### Removing it
+
+```sh
+tdtheme uninstall
+```
+
+Restores the stock UI **first**, then removes the three commands from `PATH`. The
+order is the point: once the links are gone there is no way to undo a theme but
+by hand-editing four undocumented files.
+
+**The checkout is not deleted.** It holds your themes, and a command whose name
+reads like "remove this program" should not be the thing that deletes them. It
+prints the directory and the `rm -rf` for it, and leaves that decision to you —
+including whether to keep `baseline.local/`.
+
+`--keep-files` removes the commands but leaves TouchDesigner themed as it is now.
+
 ### Looking at the icons
 
 The icon set is the part you cannot judge from a number, so it gets its own
@@ -323,6 +361,8 @@ Format details that matter, all verified rather than assumed:
 | `diff NAME` | show exactly what a theme changes, old value vs new |
 | `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; `--allow-unknown` to write despite keys this baseline has never seen; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
+| `update` | `git pull` this checkout from its remote; refuses on uncommitted changes or a diverged branch |
+| `uninstall` | restore the stock UI and remove the commands from `PATH` (the checkout is kept) |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
 | `icons preview [NAME]` | write a PNG contact sheet so the icons can actually be looked at |

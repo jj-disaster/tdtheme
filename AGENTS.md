@@ -182,6 +182,49 @@ fell through to its own `return 1`, so a writable directory that *was* on
 leaked into a `$(...)`. In shell, **a function's last command decides its
 status**, and a `[ ... ] && printf` that does not run returns 1.
 
+## `uninstall` and `update` are refusals, and the order of `uninstall` is the point
+
+`uninstall` restores the stock install **first**, then removes the links. That
+order is load-bearing: the install is the only step the user cannot undo once
+the commands are gone, since afterwards there is no way to run `reset`. A
+failure to restore therefore leaves the links alone rather than proceeding.
+
+**The checkout is never deleted.** It holds the user's themes, and a command
+named "uninstall" deleting them is a data-loss trap with a friendly name. The
+`rm -rf` is printed and the decision is left to the user. `--keep-files` inverts
+the restore step, which is the one flag that does.
+
+`update` is `git pull --ff-only` with two refusals before it: uncommitted changes,
+and a diverged branch. Both are the same principle as `apply` refusing unknown
+keys — a hand-edited theme that was never committed is invisible to git, so
+anything that overwrites it destroys work git never saw. `--ff-only` means it
+never creates a commit the user did not ask for.
+
+**A trap that cost three of these bugs, and would cost the next one too: when
+`update` is tested, the scratch upstream must be seeded from the *working tree*,
+not from `PROJECT`'s HEAD.** Seeding from HEAD means every clone under test runs
+the previously committed `cli.py`, so a fix in an uncommitted file is never
+exercised. The symptom is a test that fails against correct code and passes
+against broken code at the same time, which reads as a flaky test rather than a
+stale fixture. `tests/test_tdtheme.py` commits the working tree into the scratch
+upstream, and asserts that the checkout *really moved* (comparing `HEAD` before
+and after) rather than trusting the command's own message — that assertion is
+what caught this, and it is why two of the four failures while building this were
+fixture mistakes rather than code.
+
+**Two more, both in the same area, both from assuming rather than reading:**
+
+- **`_git` returns `(returncode, stdout, stderr)`.** The caller unpacked it as
+  `(before, out, err)`, so `before` held a return code and every comparison was
+  against the wrong value — silently, because the values are just reassigned.
+- **`realpath()` collapses distinct links to the same file.** Using it to ask
+  "does this link point at this checkout" made a test link and the real
+  `/opt/homebrew` one look identical, so `uninstall` removed the real ones. But
+  removing `realpath` to fix that broke the reverse case: macOS puts `/private`
+  in front of everything under `/var`, and `T.root` is resolved while a link
+  target read from `PATH` is not. **Both sides must go through the same
+  `realpath`**, and the dedup is a `set()`, not a comparison.
+
 ## Backups are opt-in, and re-applying is the recovery path
 
 `apply` copies the outgoing stores and icons to `backups/<timestamp>/` only when
