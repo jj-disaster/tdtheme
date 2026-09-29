@@ -297,7 +297,7 @@ def _installed_links():
     reports what is actually there now. A stale record would remove links that
     are already gone and miss ones made by hand.
     """
-    here = str(T.root)
+    here = os.path.realpath(T.root)
     found = []
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
@@ -312,11 +312,25 @@ def _installed_links():
                 continue
             resolved = target if os.path.isabs(target) else str(Path(entry) / target)
             try:
+                # The link target and T.root are resolved through the *same*
+                # realpath, because macOS puts /private in front of everything
+                # under /var - so a link made in a temp dir reads as
+                # /var/folders/... while Path(__file__) reads as
+                # /private/var/folders/... Comparing one resolved to the other
+                # finds nothing, on a Mac, in every temp dir.
+                #
+                # Note this is about *which checkout*, not about deduplicating:
+                # each link is only ever visited once, because the loop is over
+                # PATH entries and each entry is visited once. The earlier
+                # realpath-based version double-reported because PATH itself
+                # named the same directory twice, which set() below handles.
                 if os.path.realpath(resolved).startswith(here + os.sep):
                     found.append(path)
             except OSError:
                 continue
-    return found
+    # PATH can name the same directory twice, and one link per command is all
+    # there is to remove. Sorted so the output is stable run to run.
+    return sorted(set(found))
 
 
 def cmd_uninstall(args) -> int:
@@ -354,6 +368,7 @@ def cmd_uninstall(args) -> int:
     # 2. Remove the links. Only ones that point at *this* checkout - a link to
     #    somewhere else is not this tool's to delete.
     links = _installed_links()
+    failures = 0
     if not links:
         print("\nNo links to this checkout on PATH.")
     for path in links:
@@ -361,8 +376,11 @@ def cmd_uninstall(args) -> int:
             path.unlink()
             print(f"  removed {path}")
         except OSError as exc:
-            bad = f"could not remove {path}: {exc}"
-            print(f"  PROBLEM  {bad}", file=sys.stderr)
+            # A failed unlink is a real problem and changes the exit code. The
+            # install is already restored either way, so this is reported and
+            # then folded into the exit status rather than aborting.
+            failures += 1
+            print(f"  PROBLEM  could not remove {path}: {exc}", file=sys.stderr)
 
     # 3. The state file, so a re-clone does not inherit a phantom theme.
     applied = T._applied_path()
@@ -371,6 +389,7 @@ def cmd_uninstall(args) -> int:
             applied.unlink()
             print(f"  removed {applied.name}")
         except OSError as exc:
+            failures += 1
             print(f"  PROBLEM  could not remove {applied.name}: {exc}", file=sys.stderr)
 
     print(f"\nDone. TouchDesigner is back to stock. The checkout is still here:\n"
@@ -378,6 +397,11 @@ def cmd_uninstall(args) -> int:
           f"It holds your themes, so it is not deleted. To remove it and this "
           f"machine's\nprivate baseline as well:\n"
           f"  rm -rf {T.root}")
+    if failures:
+        print(f"\n{failures} thing(s) above could not be removed, so this is "
+              f"not\nfully uninstalled. The install is stock either way.",
+              file=sys.stderr)
+        return EXIT_ERROR
     return EXIT_OK
 
 
@@ -405,11 +429,12 @@ def cmd_update(args) -> int:
         print(f"error: {T.root} is not a git checkout ({err})", file=sys.stderr)
         return EXIT_ERROR
 
-    before, out, err = _git(["rev-parse", "--short", "HEAD"], T.root)
-    if before:
-        before = out
+    # `_git` returns (returncode, stdout, stderr). Getting this order wrong is
+    # silent - the values are just reassigned, so `before` held a return code
+    # and every comparison below was against the wrong thing.
+    _, before, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
 
-    status, out, _ = _git(["status", "--porcelain"], T.root)
+    _, out, _ = _git(["status", "--porcelain"], T.root)
     dirty = [l for l in out.splitlines() if l.strip()]
     if dirty:
         print("Refusing: this checkout has uncommitted changes, and a pull can "
@@ -439,7 +464,7 @@ def cmd_update(args) -> int:
                   file=sys.stderr)
         return EXIT_ERROR
 
-    after, _, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
+    _, after, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
     if before and after and before != after:
         print(f"Updated {before} -> {after}")
         # The install is merge(baseline, theme), so a pull that changes either

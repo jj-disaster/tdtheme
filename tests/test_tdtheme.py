@@ -1413,6 +1413,232 @@ check(not_runnable.returncode != 0,
       f"a python3 on PATH that cannot run is not silently trusted "
       f"(exit {not_runnable.returncode})")
 
+# ------------------------------------------------- uninstall and update
+#
+# Both of these can destroy work, so both refuse rather than warn, and both are
+# tested against a scratch git remote rather than the network.
+print()
+print("Uninstall and update")
+print("-" * 60)
+
+# `update` is `git pull`, and the three outcomes that matter are: refuses on a
+# dirty tree, fast-forwards, and refuses to invent a merge. Each gets a real
+# upstream, because the first version of this reported "Already up to date" on a
+# pull that had genuinely moved - a fixture problem and a code problem at once,
+# and only running git for real distinguishes them.
+upstream = tmp / "upstream.git"
+work = tmp / "upstream-work"
+subprocess.run(["git", "init", "-q", "--bare", str(upstream)], check=True)
+subprocess.run(["git", "clone", "-q", str(upstream), str(work)], check=True)
+for cfg in (("user.email", "test@example.invalid"), ("user.name", "test")):
+    subprocess.run(["git", "-C", str(work), "config", *cfg], check=True)
+subprocess.run(["git", "-C", str(work), "remote", "add", "src", str(PROJECT)],
+               check=True)
+subprocess.run(["git", "-C", str(work), "fetch", "-q", "src", "main"], check=True)
+subprocess.run(["git", "-C", str(work), "checkout", "-q", "-B", "main", "FETCH_HEAD"],
+               check=True)
+# Seed the upstream from the *working tree*, not from PROJECT's HEAD. Otherwise
+# every clone under test runs the previously committed cli.py, so a fix in an
+# uncommitted file is not exercised at all - which is exactly what happened: the
+# clone fast-forwarded correctly and still printed "Already up to date", because
+# the old return-order bug was the code actually running.
+subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+# --allow-empty so this succeeds whether or not the working tree differed, which
+# depends on whether cli.py happens to be committed at the time the suite runs.
+subprocess.run(["git", "-C", str(work), "commit", "-q", "--allow-empty", "-m",
+                "test: the working tree as upstream"], check=True)
+subprocess.run(["git", "-C", str(work), "push", "-q", str(upstream), "main"], check=True)
+
+
+def clone_to(name):
+    """A fresh clone of the scratch upstream, so each case starts clean."""
+    dest = tmp / name
+    subprocess.run(["git", "clone", "-q", str(upstream), str(dest)], check=True)
+    return dest
+
+
+def run_in(repo, argv):
+    """Run the CLI inside a scratch clone, with the real network unreachable."""
+    return subprocess.run([sys.executable, str(repo / "cli.py"), *argv],
+                          capture_output=True, text=True, cwd=str(repo),
+                          env={**os.environ})
+
+
+# A dirty tree is the case that matters: a theme edited on disk and not yet
+# committed is invisible to git, so a pull that overwrites it loses work that no
+# `git reflog` can bring back.
+dirty = clone_to("up-dirty")
+(dirty / "README.md").write_text("a local edit\n")
+r = run_in(dirty, ["update"])
+check(r.returncode != 0, f"update refuses on an uncommitted change ({r.returncode})")
+check("uncommitted" in r.stderr, "and says why")
+check("README.md" in r.stderr, "and names what is modified")
+check("git stash" in r.stderr, "and gives a way forward that does not lose it")
+check((dirty / "README.md").read_text() == "a local edit\n",
+      "and the local edit is untouched")
+
+# A clean tree strictly behind: the ordinary case, and the one that must report
+# what it did rather than shrugging.
+behind = clone_to("up-behind")
+subprocess.run(["git", "-C", str(work), "commit", "-q", "--allow-empty",
+                "-m", "upstream moved on"], check=True)
+subprocess.run(["git", "-C", str(work), "push", "-q", str(upstream), "main"], check=True)
+was = subprocess.run(["git", "-C", str(behind), "rev-parse", "--short", "HEAD"],
+                     capture_output=True, text=True).stdout.strip()
+r = run_in(behind, ["update"])
+now = subprocess.run(["git", "-C", str(behind), "rev-parse", "--short", "HEAD"],
+                     capture_output=True, text=True).stdout.strip()
+check(r.returncode == 0, f"update succeeds on a clean tree ({r.returncode}: "
+      f"{r.stderr.strip()[:60]})")
+check(now != was, f"and the checkout really moved ({was} -> {now})")
+check(was in r.stdout and now in r.stdout,
+      f"and it reports the move it made ({r.stdout.strip()[:60]!r})")
+check("Already up to date" not in r.stdout,
+      "and does not claim there was nothing to do")
+
+# Already current: the message is different and must not claim a move.
+r = run_in(behind, ["update"])
+check(r.returncode == 0 and "Already up to date" in r.stdout,
+      f"a second run says there is nothing to do ({r.returncode})")
+check(was not in r.stdout.split("Already up to date")[0],
+      "and does not invent a version change")
+
+# Diverged: both sides moved, so there is no fast-forward. Resolving a merge on
+# the user's behalf is exactly the thing that produces a conflict they have no
+# memory of, so this stops.
+diverge = clone_to("up-diverge")
+subprocess.run(["git", "-C", str(diverge), "commit", "-q", "--allow-empty",
+                "-m", "local work"], check=True)
+subprocess.run(["git", "-C", str(work), "commit", "-q", "--allow-empty",
+                "-m", "upstream work"], check=True)
+subprocess.run(["git", "-C", str(work), "push", "-q", str(upstream), "main"], check=True)
+r = run_in(diverge, ["update"])
+check(r.returncode != 0, f"update refuses when the branches diverged ({r.returncode})")
+check("rebase" in r.stderr or "merge" in r.stderr,
+      "and explains that there is no fast-forward")
+head = subprocess.run(["git", "-C", str(diverge), "rev-parse", "HEAD"],
+                      capture_output=True, text=True).stdout.strip()
+check(subprocess.run(["git", "-C", str(diverge), "status", "--porcelain"],
+                     capture_output=True, text=True).stdout.strip() == "",
+      "and left the tree alone, with no half-finished merge")
+check("MERGE_HEAD" not in subprocess.run(
+    ["git", "-C", str(diverge), "rev-parse", "--verify", "-q", "MERGE_HEAD"],
+    capture_output=True, text=True).stdout, "and no merge in progress")
+
+# Not a git checkout at all: there is nothing to pull, and saying so is more
+# useful than a git error.
+nogit = tmp / "not-a-checkout"
+nogit.mkdir()
+for f in ("cli.py", "tdtheme.py", "tdicons.py", "tdtiff.py"):
+    shutil.copy2(PROJECT / f, nogit / f)
+r = subprocess.run([sys.executable, str(nogit / "cli.py"), "update"],
+                   capture_output=True, text=True, cwd=str(nogit),
+                   env={**os.environ})
+check(r.returncode != 0, f"update refuses outside a checkout ({r.returncode})")
+check("git clone" in r.stderr, "and points at re-cloning instead")
+
+# `uninstall` restores the install first, because that is the one step the user
+# cannot undo once the links are gone.
+#
+# These run out of process, against their own config dirs, so the byte
+# comparisons read the files directly rather than through the module-level
+# `install`/`install_icons` paths the rest of this file uses. TouchDesigner's
+# real config is never involved: TDTHEME_CONFIG points somewhere disposable.
+def seed_config(where):
+    """A pristine stock install in `where`, so apply/reset have something to act on."""
+    where.mkdir(parents=True, exist_ok=True)
+    for store in T.STORE_FILES:
+        shutil.copy2(T.baseline_dir / store, where / store)
+    (where / T.SYSTEM_DIRNAME).mkdir(exist_ok=True)
+    shutil.copy2(T.baseline_dir / T.SYSTEM_DIRNAME / T.UI_TOX,
+                 where / T.SYSTEM_DIRNAME / T.UI_TOX)
+    icons = where / T.ICONS_DIRNAME
+    icons.mkdir(exist_ok=True)
+    for tiff in sorted(T.baseline_icons_dir().glob("*.tiff")):
+        shutil.copy2(tiff, icons / tiff.name)
+
+
+def state_of(where):
+    """The bytes uninstall is supposed to control, for direct comparison."""
+    out = {store: (where / store).read_bytes() for store in T.STORE_FILES}
+    out["icons"] = {p.name: p.read_bytes()
+                    for p in sorted((where / T.ICONS_DIRNAME).glob("*.tiff"))}
+    return out
+
+
+def stock_state():
+    out = {store: (T.baseline_dir / store).read_bytes() for store in T.STORE_FILES}
+    out["icons"] = {p.name: p.read_bytes()
+                    for p in sorted(T.baseline_icons_dir().glob("*.tiff"))}
+    return out
+
+
+STOCK_BYTES = stock_state()
+
+u_repo = clone_to("uninstall-repo")
+u_config = tmp / "uninstall-config"
+seed_config(u_config)
+subprocess.run([sys.executable, str(u_repo / "cli.py"), "apply", "midnight"],
+               capture_output=True, text=True, cwd=str(u_repo),
+               env={**os.environ, "TDTHEME_CONFIG": str(u_config)})
+check(state_of(u_config) != STOCK_BYTES,
+      "test uninstall: the install really is themed to start with")
+
+# A sandbox bin dir holding links to this checkout, and a PATH that cannot reach
+# the real /opt ones. A sandbox link and a real link resolve to the same file,
+# so an earlier version reported - and unlinked - the real one too, twice.
+u_bin = tmp / "uninstall-bin"
+u_bin.mkdir()
+for link, target in (("tdtheme", "tdtheme"), ("tdthememaker", "tdthememaker-cli"),
+                     ("check-td-writes", "check-td-writes")):
+    (u_bin / link).symlink_to(u_repo / target)
+r = subprocess.run([sys.executable, str(u_repo / "cli.py"), "uninstall"],
+                   capture_output=True, text=True, cwd=str(u_repo),
+                   env={**os.environ, "PATH": f"{u_bin}:/usr/bin:/bin",
+                        "TDTHEME_CONFIG": str(u_config)})
+check(r.returncode == 0, f"uninstall succeeds ({r.returncode}: {r.stderr.strip()[:60]})")
+check(state_of(u_config) == STOCK_BYTES,
+      "and puts TouchDesigner's files back to stock")
+check(not list(u_bin.iterdir()), "and removes the links")
+check(not (u_repo / ".applied.json").exists(), "and clears the applied-theme record")
+check(u_repo.exists() and (u_repo / "tdtheme.py").exists(),
+      "and does NOT delete the checkout - it holds the user's themes")
+check("rm -rf" in r.stdout, "but says how to remove it, leaving the choice to them")
+
+# A link to somewhere else is not this tool's to delete.
+other = tmp / "someone-elses-checkout"
+other.mkdir()
+(other / "tdtheme").write_text("#!/bin/sh\n")
+os.chmod(other / "tdtheme", 0o755)
+keep_bin = tmp / "uninstall-keep-bin"
+keep_bin.mkdir()
+(keep_bin / "tdtheme").symlink_to(other / "tdtheme")
+r = subprocess.run([sys.executable, str(u_repo / "cli.py"), "uninstall", "--keep-files"],
+                   capture_output=True, text=True, cwd=str(u_repo),
+                   env={**os.environ, "PATH": f"{keep_bin}:/usr/bin:/bin",
+                        "TDTHEME_CONFIG": str(u_config)})
+check((keep_bin / "tdtheme").is_symlink(),
+      "uninstall leaves a link to another checkout alone")
+check("No links to this checkout" in r.stdout, "and says there was nothing of its own")
+
+# --keep-files removes the commands but leaves TouchDesigner themed, which is
+# the one case where the order in the docstring is deliberately inverted.
+k_repo = clone_to("uninstall-keep-repo")
+k_config = tmp / "uninstall-keep-config"
+seed_config(k_config)
+subprocess.run([sys.executable, str(k_repo / "cli.py"), "apply", "midnight"],
+               capture_output=True, text=True, cwd=str(k_repo),
+               env={**os.environ, "TDTHEME_CONFIG": str(k_config)})
+k_bin = tmp / "uninstall-keep2-bin"
+k_bin.mkdir()
+(k_bin / "tdtheme").symlink_to(k_repo / "tdtheme")
+r = subprocess.run([sys.executable, str(k_repo / "cli.py"), "uninstall", "--keep-files"],
+                   capture_output=True, text=True, cwd=str(k_repo),
+                   env={**os.environ, "PATH": f"{k_bin}:/usr/bin:/bin",
+                        "TDTHEME_CONFIG": str(k_config)})
+check(not list(k_bin.iterdir()), "--keep-files still removes the links")
+check(state_of(k_config) != STOCK_BYTES, "--keep-files leaves TouchDesigner themed")
+
 # ------------------------------------------------------------------- setup
 #
 # `setup` is the one-shot installer, and it exists because of the two ways an
