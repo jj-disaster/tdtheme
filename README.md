@@ -11,34 +11,99 @@ every glyph - so you can build and switch themes instead of hand-editing them.
 ./tdtheme reset              # back to the stock look
 ```
 
-## Running it from anywhere
+## Installation
 
-The wrapper resolves its own location, so it does not care what the working
-directory is - `tdtheme status` behaves identically from `$HOME` or `/`. To drop
-the `./`, put it on `PATH` with a symlink:
+Requires macOS and TouchDesigner. Nothing else — no pip, no virtualenv, no
+build step. It is a few Python files that read and write four files inside your
+TouchDesigner install.
+
+```sh
+git clone https://github.com/jj-disaster/tdtheme.git
+cd tdtheme
+./tdtheme status
+```
+
+That last line is the real test. If it prints your TouchDesigner build and a
+list of themes, you are installed and can stop reading.
+
+### Put it on your PATH (optional)
+
+The wrapper resolves its own location, so it works from any directory without
+this step. To drop the `./`:
 
 ```sh
 ln -s "$PWD/tdtheme" /opt/homebrew/bin/tdtheme
 ```
 
-A symlink is the right mechanism here rather than installing a copy. `tdtheme`
-has no dependencies to resolve, and it reads `themes/` and `baseline/` from the
-repository it lives in, so a symlink keeps one copy of your theme data and makes
-the command always reflect the current checkout. An installed copy would be a
-second, silently-drifting copy of the same themes - and `apply` would install
-from whichever one it found.
+Use `/usr/local/bin/tdtheme` instead if that is where your `PATH` looks — Apple
+Silicon Homebrew installs to `/opt/homebrew/bin`, Intel to `/usr/local/bin`. If
+neither exists, `mkdir -p` one you can write to, or skip this step entirely.
 
-`check-td-writes` can be symlinked the same way if you want it on `PATH` too.
-`tdthememaker` has a wrapper for the same reason, in `tdthememaker-cli` - the
-package directory already owns the `tdthememaker` name, so the file is named
-differently and symlinked under the name the tool answers to:
+**A symlink, not a copy.** `tdtheme` has no dependencies to resolve, and it reads
+`themes/` and `baseline/` from the repository it lives in. A symlink keeps one
+copy of your theme data and makes the command always reflect the current
+checkout; an installed copy would be a second, silently-drifting copy of the
+same themes, and `apply` would install from whichever one it found first.
+
+Then it works from anywhere:
+
+```sh
+cd ~
+tdtheme apply midnight
+```
+
+The two companion tools can be linked the same way. `check-td-writes` is
+symlinked under its own name; `tdthememaker` needs a different filename, because
+the package directory inside the repo already owns that name:
 
 ```sh
 ln -s "$PWD/tdthememaker-cli" /opt/homebrew/bin/tdthememaker
 ```
 
-It works from any directory too, and keeps the working directory where you left
-it, so a relative path you pass means what you meant.
+### If it says `no python3 found`
+
+You do not need to install Python. TouchDesigner already ships a full CPython
+3.11, and the wrapper falls back to it automatically — it only complains if
+*neither* a working `python3` on your `PATH` *nor* TouchDesigner can be found.
+
+The case that trips people up is a Mac without the Command Line Tools, where
+`/usr/bin/python3` exists but is only a 118 KB stub that opens a GUI installer
+instead of running. If you would rather have a real `python3`:
+
+```sh
+xcode-select --install
+```
+
+### If it cannot write to TouchDesigner
+
+`apply` needs write access to
+`/Applications/TouchDesigner.app/Contents/Resources/tfs/Config`. If the files are
+owned by root, you will get a permission error.
+
+```sh
+sudo chown -R "$USER" /Applications/TouchDesigner.app/Contents/Resources/tfs/Config
+```
+
+Note that the app bundle's code signature was already invalid before this tool
+existed (a sealed resource is missing from `Python.framework`), so editing files
+inside the bundle does not make that worse. See
+[Things that will bite you](#things-that-will-bite-you).
+
+### If your TouchDesigner is newer than the baseline
+
+Run this once, before your first `apply`:
+
+```sh
+tdtheme capture --local
+```
+
+The committed baseline was captured from one specific build (2025.33230). A newer
+build may have added keys, and `apply` **refuses to write** rather than delete
+them — see [If your TouchDesigner is newer than the
+baseline](#if-your-touchdesigner-is-newer-than-the-baseline) for what that
+message means. `capture --local` writes a gitignored, per-machine copy that every
+later command prefers, so your install is diffed against the build you actually
+run. It is safe to delete the directory to go back.
 
 ## What it actually edits
 
@@ -76,11 +141,11 @@ Format details that matter, all verified rather than assumed:
 
 | Command | What it does |
 |---|---|
-| `capture` | snapshot the installed files and icons as the baseline (refuses to clobber; `--force`) |
+| `capture` | snapshot the installed files and icons as the baseline (refuses to clobber; `--force`; `--local` for a private one) |
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |
-| `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; the `ui.tox` is always written) |
+| `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; `--allow-unknown` to write despite keys this baseline has never seen; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |
 | `icons diff NAME` | which icons a theme repaints, by pixel (`--bytes` to skip decoding) |
@@ -133,6 +198,40 @@ So:
 - **`backups/` is gitignored.** It is a local scratch space, never committed,
   and it sits in the checkout rather than anywhere off the disk — so it protects
   against a wrong `apply`, not against losing the machine.
+
+### If your TouchDesigner is newer than the baseline
+
+The baseline in this repository was captured from one build. A newer build may
+have added keys to `TouchColors` or `TouchOptions`, and `apply` writes
+`merge(baseline, theme)` — so a key that is in neither input is **not written
+back**. It would be deleted, silently, as a side effect of changing the
+colours.
+
+So `apply` stops instead, and writes nothing:
+
+```
+Not applied: the install holds 3 key(s) this baseline has never seen, in
+TouchColors (3); applying would drop them and nothing can put them back. Run
+`tdtheme capture --local` to re-baseline your own build, or pass
+--allow-unknown to drop them deliberately.
+```
+
+`tdtheme capture --local` re-baselines into `baseline.local/` — a gitignored,
+per-machine copy that every later command prefers over the committed `baseline/`.
+After that those keys are ordinary baseline keys, `tdtheme reset` handles them
+correctly, and the check stops firing. Delete the directory to go back to the
+shipped baseline.
+
+Because the refusal writes nothing, **it is safe to ignore and come back to**:
+whatever the apply was going to do, you can still do it after re-baselining.
+`--allow-unknown` is the other way past it, for the case where the extra keys
+really are junk you want gone rather than kept.
+
+Only keys the *last applied theme* did not write are treated this way. A key one
+of your own themes added is not blocked — it is in the install because this tool
+put it there, so dropping it when you switch themes is the intended behaviour
+and not loss. `tests/test_tdtheme.py` pins both halves, including that a theme
+which adds a key is still dropped by the next one.
 
 ### The accepted value syntax
 
@@ -412,7 +511,7 @@ suspicious.
   pristine keys validate clean.
 - Colour channels are **never clamped**. The shipped `POP.hilite` contains
   `1.2`; values above 1.0 are intentional.
-- Unknown keys warn - usually a typo, or a key a newer TouchDesigner added.
+- Unknown keys warn - a typo, or a key this build's TouchDesigner added.
 - Setting both `X` and `default.X` warns that the tier precedence is
   unverified.
 - **Icons are validated before anything is written into the bundle.** An icon
@@ -433,11 +532,15 @@ suspicious.
   Icons are additionally cached lazily on first use, so they are not re-read
   even for a window that opens later in the session.
 - **A TouchDesigner update wipes all of it.** `status` compares the live build
-  against the one recorded in the baseline and warns on a mismatch;
-  `capture --force` refreshes it. A new build may also ship new or resized
-  icons, which `validate_icons` reports per theme, and it will almost certainly
-  ship a new `ui.tox` - after an update, re-copy the stock file into
-  `themes/default/` or every theme inherits the new build's layout.
+  against the one recorded in the baseline and warns on a mismatch. A new build
+  may also add store keys and ship new or resized icons, which
+  `validate_icons` reports per theme, and it will almost certainly ship a new
+  `ui.tox` - after an update, re-copy the stock file into `themes/default/` or
+  every theme inherits the new build's layout. **Run
+  `tdtheme capture --local` first, before any `apply`** — a build that added
+  store keys makes `apply` refuse until you have, and it will not refuse if you
+  have already applied and lost them. See
+  [If your TouchDesigner is newer than the baseline](#if-your-touchdesigner-is-newer-than-the-baseline).
 - **The app bundle's code signature was already invalid** before this tool
   existed (a sealed resource is missing in `Python.framework`). Editing
   files inside the bundle does not make that worse, but it is why macOS
@@ -549,6 +652,8 @@ check-td-writes         settles whether TouchDesigner writes these files
 docs/                   background reading; see Documentation below
 baseline/               captured pristine files + Icons/ + System/ui.tox
                         + version.json
+baseline.local/         optional, gitignored; `capture --local` writes here
+                        and it shadows baseline/ when it exists
 themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full
                         set), and optionally ui.tox
   backups/<timestamp>/    only with `apply --backup`; off by default, see below

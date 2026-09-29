@@ -45,6 +45,75 @@ loudly instead of writing quotes into a live install.
 unfixed code, because no committed overlay uses single quotes — the targeted
 probes are what actually catch it. Keep both kinds.
 
+## A key the baseline has not seen stops `apply`, and is never carried through
+
+`apply` writes `merge(baseline, theme)` and that is settled. A key present only
+in the install is in neither input, so **every apply deletes it** — silently,
+exit 0, reported only as a count that reads as a fact about the theme. On a
+TouchDesigner build newer than the captured baseline that is data loss.
+
+`install_only_keys` finds them and `apply` raises `UnknownKeysError` — **before
+the backup and before any write**, so a refusal leaves the install byte-identical
+and creates no half-made backup set. The CLI prints the store and count, names
+`capture --local`, and offers `--allow-unknown`. `cmd_reset` forwards to
+`cmd_apply`, so the gate covers `reset` too; there is no theme that is exempt.
+
+**It refuses rather than warns, and that is the load-bearing part.** Warning was
+implemented first and measured: the warning is emitted on the same run that
+deletes the keys, so it is advice about a problem the command has already made
+irreversible, and the `capture --local` it recommends finds nothing left to
+restore. A second `apply` has no orphan to report. Do not "soften" this back into
+a warning. The test pins the absence of any write, not just the message.
+
+**Do not "fix" this by widening the merge base with the live install's keys.**
+That was implemented and reverted, and the reason is the one that makes it
+tempting: a key added by a *theme overlay* is indistinguishable from a key added
+by a *build*, and carrying both through makes themes permanently additive. That
+breaks the total-overwrite property the icon fill-in, the `ui.tox` fallback and
+`reset` all depend on. Four pre-existing tests in `test_tdtheme.py` caught it —
+the one that matters asserts a theme which adds a key is still dropped by the
+next theme. Widening also had to be kept out of `plan()` entirely, because
+`tdtheme diff` is settled as *what a theme adds to the baseline* (see Traps).
+
+**The ambiguity that forced report-only is resolvable, by author rather than by
+key.** `install_only_keys` subtracts the keys introduced by the theme named in
+`.applied.json`: this tool put those there, so dropping them on a theme switch
+is settled behaviour and not loss, and a user with a custom theme that adds a
+key must still be able to switch themes. Without this the gate is a false
+positive on real usage — measured, not assumed. Everything else is treated as a
+build's, and an unreadable or missing `.applied.json` errs towards *blocking*,
+because a theme-added key that looks like a build's costs one `capture --local`
+and a build key that looks like a theme's costs the user their build.
+
+**`capture --local` is the fix, and it is not optional advice.** It re-baselines
+into `baseline.local/`, which shadows the committed `baseline/` for every later
+command. Unlike the warning it replaced, following it always works, because the
+refusal wrote nothing.
+
+`baseline_dir` stays a module-level `Path`, resolved once at import, because two
+test files assign `T.baseline_dir` outright. Turning it into a function breaks
+both — and the two newer globals, `baseline_shipped_dir` and
+`baseline_shadow_dir`, are derived from `root` at import and so are **not**
+repointed by assigning `baseline_dir`. Both test files now set all three; the
+suite was writing a 2.2 MB shadow into the real checkout before that. `capture
+--local` must write through `target_dir` for the stores, the icons, the `ui.tox`
+**and** `version.json` — the last three previously went through the
+import-time-resolved globals, which pointed at the *committed* baseline, so a
+first `--local` capture wrote a split result across two directories. `cmd_capture`
+had the mirror bug: it classified icons as "whatever is not a store", which swept
+in the `ui.tox` and then `stat`ed it inside the icon directory. That stayed
+hidden while both paths coincided and became a `FileNotFoundError` the moment a
+shadow made them differ.
+
+## `capture --force` on the committed baseline needs the acknowledgement
+
+`baseline/` is tracked, so re-capturing from a build nobody else runs is a change
+every user of the checkout inherits. `--local` is the private path and is
+gitignored. `cmd_capture` refuses `--force` against the committed baseline
+unless `--local` is also passed, and says both options in the refusal. A
+refusal, not a warning, because the whole cost here is the one accident the flag
+is meant to prevent: `git add -A` committing 2.2 MB of one machine's build.
+
 ## Backups are opt-in, and re-applying is the recovery path
 
 `apply` copies the outgoing stores and icons to `backups/<timestamp>/` only when
@@ -187,6 +256,11 @@ These cost time. They are properties of the code, not opinions.
     `apply` returns both halves as `result["changes"]`. Do not build a
     change-report on bare `diff` and conclude removals are impossible; they are
     merely unreported.
+  - **A key only in the install is reported by `install_only_keys`, not by
+    `diff` and not by `store_changes` either way.** `store_changes` will list one
+    under `removed` when an apply drops it, and that is the *consequence*, not
+    the cause: the refusal is raised before the write, so nothing is dropped and
+    a later `--allow-unknown` apply reports it then. See the section above.
   - **`apply` prints a per-store count, and no key names.** `TouchColors: 460
     changed` is a count, not a change report. It went through three states and
     the current one is the third: named per-key groups

@@ -82,6 +82,10 @@ if BASE.is_dir():
 os.environ["TDTHEME_CONFIG"] = str(install)
 T.root = tmp
 T.baseline_dir = tmp / "baseline"
+# Resolved from `root` at import, not derived from `baseline_dir`, so this suite
+# needs them repointed too - see the same note in test_tdtheme.py.
+T.baseline_shipped_dir = T.baseline_dir
+T.baseline_shadow_dir = tmp / "baseline.local"
 T.themes_dir = tmp / "themes"
 T.backups_dir = tmp / "backups"
 
