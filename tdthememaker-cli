@@ -37,4 +37,40 @@ else
     PYTHONPATH="$here"
 fi
 export PYTHONPATH
-exec python3 -m tdthememaker.cli "$@"
+
+# The same interpreter fallback `tdtheme` has, and for the same reason: a
+# `python3` on PATH can exist and be executable while not running at all, which
+# is exactly what the Command Line Tools stub is. `command -v` cannot tell the
+# difference. The probe runs the candidate, because a bare -V is not proof
+# either. Two copies of it rather than a shared sourced file, because a missing
+# or renamed common file would break both commands at once, and the tests hold
+# the two in agreement instead.
+usable() {
+    command -v "$1" >/dev/null 2>&1 && "$1" -c '' >/dev/null 2>&1
+}
+
+py=python3
+if ! usable "$py"; then
+    for candidate in \
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+    do
+        if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
+            py=$candidate
+            break
+        fi
+    done
+fi
+if ! usable "$py"; then
+    if command -v python3 >/dev/null 2>&1; then
+        echo "tdthememaker: the python3 on your PATH is present but does not run." >&2
+        echo "tdthememaker: that is the Command Line Tools stub. Install the real" >&2
+        echo "tdthememaker: one with 'xcode-select --install'." >&2
+    else
+        echo "tdthememaker: no python3 on PATH, and no TouchDesigner interpreter." >&2
+        echo "tdthememaker: install the Command Line Tools with 'xcode-select --install'," >&2
+        echo "tdthememaker: or install TouchDesigner, then try again." >&2
+    fi
+    exit 127
+fi
+
+exec "$py" -m tdthememaker.cli "$@"

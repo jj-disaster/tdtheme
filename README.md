@@ -94,10 +94,10 @@ three commands that cannot run.
 
 The case that trips people up is a Mac without the Command Line Tools, where
 `/usr/bin/python3` exists but is only a 118 KB stub that opens a GUI installer
-instead of running. The fallback covers the case where no `python3` is on your
-`PATH` at all; a stub that is *present but unrunnable* still fails, because
-`PATH` lookup stops at the first match. If you hit that, either install the real
-thing or move TouchDesigner so the script can find it:
+instead of running. All three commands handle that: each one *runs* the `python3`
+it finds rather than trusting that it exists, and falls back to TouchDesigner's
+bundled interpreter when it does not work. You should still install the real
+thing, so that anything else on your machine that wants `python3` gets it too:
 
 ```sh
 xcode-select --install

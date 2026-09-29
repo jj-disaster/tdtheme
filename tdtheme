@@ -27,20 +27,43 @@ here=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
 # alongside, so this is a dependency the user already has rather than a new one.
 # Checked explicitly and first-listed after python3 so a working PATH still wins.
 py=python3
-if ! command -v "$py" >/dev/null 2>&1; then
+# "It exists on PATH" is not the same question as "it runs", and the stub is
+# exactly the case where they disagree: a 118 KB executable that opens an
+# installer and exits non-zero. So the candidate has to be *run* before it is
+# trusted, not merely located.
+#
+# The probe is `-c` with no code, because a bare `-V` is not enough either - a
+# stub could answer a version and still be useless - and the output is sent to
+# /dev/null because some builds print a banner on startup. The cost is one
+# extra process per run, which is unmeasurable next to reading 97 TIFFs.
+usable() {
+    command -v "$1" >/dev/null 2>&1 && "$1" -c '' >/dev/null 2>&1
+}
+
+if ! usable "$py"; then
     for candidate in \
         /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
     do
-        if [ -x "$candidate" ]; then
+        if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
             py=$candidate
             break
         fi
     done
 fi
-if ! command -v "$py" >/dev/null 2>&1; then
-    echo "tdtheme: no python3 found on PATH, and no TouchDesigner interpreter" >&2
-    echo "tdtheme: install the Command Line Tools with 'xcode-select --install'," >&2
-    echo "tdtheme: or install TouchDesigner, then try again." >&2
+if ! usable "$py"; then
+    # Name both cases, because the fix differs and a user who has a stub needs
+    # to know that is what they have - the symptom is the same either way, and
+    # "no python3 found" is the wrong sentence for a python3 that is right there
+    # and does nothing.
+    if command -v python3 >/dev/null 2>&1; then
+        echo "tdtheme: the python3 on your PATH is present but does not run." >&2
+        echo "tdtheme: that is the Command Line Tools stub. Install the real one" >&2
+        echo "tdtheme: with 'xcode-select --install'." >&2
+    else
+        echo "tdtheme: no python3 on PATH, and no TouchDesigner interpreter either." >&2
+        echo "tdtheme: install the Command Line Tools with 'xcode-select --install'," >&2
+        echo "tdtheme: or install TouchDesigner, then try again." >&2
+    fi
     exit 127
 fi
 exec "$py" "$here/cli.py" "$@"

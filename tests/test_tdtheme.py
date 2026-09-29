@@ -1396,8 +1396,16 @@ check(no_python.returncode == 0 and "defaultnowarn" in no_python.stdout,
       f"and falls back to TouchDesigner's interpreter when PATH has no python3 "
       f"(exit {no_python.returncode}: {no_python.stderr.strip()[:70]})")
 
-# A python3 that is on PATH but will not run - the CLT stub's shape. It must not
-# be exec'd into a failure that looks like a bug in the tool.
+# A python3 that is on PATH but will not run - the CLT stub's shape, and the
+# case `command -v` cannot see. The wrapper has to try it and fall back, not
+# exec it into a failure.
+#
+# This assertion was `returncode != 0`, which passed for the wrong reason: the
+# old wrapper found the stub with `command -v`, exec'd it, and reported the
+# stub's exit status. So the test was satisfied by a *failure*, and named the
+# absence of one. What matters is that the command works, which is what it says
+# now - a stub on PATH is a reason to use TouchDesigner's interpreter, not a
+# reason to fail.
 stub_bin = tmp / "bin-with-broken-python"
 stub_bin.mkdir(exist_ok=True)
 for utility in ("dirname", "readlink"):
@@ -1409,9 +1417,10 @@ os.chmod(stub_bin / "python3", 0o755)
 not_runnable = subprocess.run(
     [str(links / "tdtheme"), "list"], capture_output=True, text=True, cwd=away,
     env={**os.environ, "PATH": os.pathsep.join([str(stub_bin), str(links)])})
-check(not_runnable.returncode != 0,
-      f"a python3 on PATH that cannot run is not silently trusted "
-      f"(exit {not_runnable.returncode})")
+check(not_runnable.returncode == 0 and "defaultnowarn" in not_runnable.stdout,
+      f"and a python3 on PATH that cannot run is not trusted, but the command "
+      f"still works (exit {not_runnable.returncode}: "
+      f"{not_runnable.stderr.strip()[:70]})")
 
 # ------------------------------------------------- uninstall and update
 #
@@ -1803,6 +1812,57 @@ check("python3" in r.stderr, "and names the missing interpreter")
 check("xcode-select" in r.stderr, "and gives a command that fixes it")
 check(not list(no_py_bin.iterdir()),
       "and creates nothing, rather than three commands that cannot run")
+
+# A python3 that exists, is executable, and does nothing. This is the Command
+# Line Tools stub: `command -v` finds it, so every existence check passes, and
+# then exec'ing it opens an installer and exits non-zero.
+#
+# `tdtheme`'s half of this is covered above, against the same stub. This is here
+# for `tdthememaker`, which carried no fallback at all - it exec'd `python3`
+# bare, so a stub on PATH took the authoring tool down with it, and silently,
+# which is the worst shape for it to fail in. The two wrappers hold their own
+# copies of the fallback rather than sharing one, so both have to be covered or
+# they will drift.
+stub_bin = tmp / "setup-stub-bin"
+stub_bin.mkdir(parents=True, exist_ok=True)
+for _u in ("dirname", "readlink", "ls", "sed", "chmod", "ln", "rm", "mkdir",
+           "mktemp", "command", "stat", "cp"):
+    _real = shutil.which(_u)
+    if _real:
+        (stub_bin / _u).symlink_to(_real)
+_stub = stub_bin / "python3"
+_stub.write_text("#!/bin/sh\nexit 1\n")     # present, executable, useless
+_stub.chmod(0o755)
+check(shutil.which("python3", path=str(stub_bin)) is not None,
+      "test setup: the stub is found by `command -v`, and would fool it")
+
+# The real python3 stays reachable further down PATH, because the fallback has
+# to beat a *found* python3, not only cover a missing one.
+stub_repo = fresh_checkout("setup-stub")
+r = subprocess.run([str(stub_repo / "tdthememaker-cli"), "--help"],
+                   capture_output=True, text=True, cwd=str(stub_repo),
+                   env={**os.environ,
+                        "PATH": f"{stub_bin}{os.pathsep}{os.environ.get('PATH','')}",
+                        "PYTHONPATH": ""})
+check(r.returncode == 0 and "usage" in r.stdout.lower(),
+      f"tdthememaker runs despite a python3 on PATH that does nothing "
+      f"(exit {r.returncode}: {(r.stderr or r.stdout).strip()[:70]})")
+
+# With nothing usable at all, the message has to name the stub specifically.
+# "no python3 found" is the wrong sentence for a python3 that is right there and
+# does nothing, and the fix differs: install the real interpreter, don't go
+# looking for one.
+_nopy2 = stub_repo / "tdthememaker-cli"
+_text2 = _nopy2.read_text().replace(
+    "/Applications/TouchDesigner.app", "/nonexistent/TouchDesigner.app")
+_nopy2.write_text(_text2)
+os.chmod(_nopy2, 0o755)
+r = subprocess.run([str(_nopy2), "--help"], capture_output=True, text=True,
+                   cwd=str(stub_repo), env={**os.environ, "PATH": str(stub_bin)})
+check(r.returncode == 127,
+      f"and exits 127 with no usable interpreter ({r.returncode})")
+check("xcode-select" in r.stderr,
+      "and still gives a command that fixes it")
 
 # The verification must not be satisfiable by some other tdtheme further down
 # PATH, and it must still run when a link is present but broken. Getting here

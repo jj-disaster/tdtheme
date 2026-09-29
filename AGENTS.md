@@ -225,6 +225,41 @@ fixture mistakes rather than code.
   target read from `PATH` is not. **Both sides must go through the same
   `realpath`**, and the dedup is a `set()`, not a comparison.
 
+## "Is it on PATH" and "does it run" are different questions
+
+Both Python wrappers carry a copy of the same interpreter selection, and both
+now **run** the candidate they find rather than locating it. That is the whole
+fix, and it exists because of the Command Line Tools stub: a `python3` that is
+present, executable, and answers `command -v` with a path, and then does
+nothing when exec'd, because it opens a GUI installer instead. Checking
+existence is exactly the check a stub passes.
+
+The original code carried a comment explaining that the two questions differ
+and then used `command -v` to answer the wrong one. A comment is not a test, and
+a comment being right while the code beneath it is wrong is the version of this
+that is hard to see.
+
+**Do not reintroduce `command -v` as the probe.** The probe runs the candidate
+(`"$1" -c '' >/dev/null 2>&1`), because a bare `-V` is not proof either and some
+builds print a banner. Two copies of the fallback, one per wrapper, on purpose: a
+shared sourced file would make a rename break both commands at once. That
+choice only pays off if both are tested, so `tests/test_tdtheme.py` drives the
+stub at **both** `tdtheme` and `tdthememaker-cli` — the second one had no
+fallback at all and was reached by exactly this reasoning, not by inspection.
+
+**When nothing usable exists, the message must distinguish a missing interpreter
+from a stub one.** "no python3 found" is a false sentence for a `python3` that is
+right there on the `PATH` and does nothing, and the user's fix differs: install
+the real interpreter, rather than go looking for one. Both wrappers exit 127
+and say `xcode-select --install` either way.
+
+An existing test here asserted `returncode != 0` for the stub case and so passed
+for the wrong reason: the old code exec'd the stub and reported *its* exit
+status, so the test was satisfied by a failure and the check name — "not
+silently trusted" — was describing a property the test never checked. It now
+asserts the command **works**. A test that pins a failure where success is
+correct is worse than no test, because it locks the bug in.
+
 ## Backups are opt-in, and re-applying is the recovery path
 
 `apply` copies the outgoing stores and icons to `backups/<timestamp>/` only when
