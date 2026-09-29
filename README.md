@@ -179,12 +179,14 @@ what you have currently set in TouchDesigner as a new theme, use
 The 97 glyphs in `Config/Icons/` are themed too, and they work differently from
 the two stores.
 
-**They are not a sparse overlay.** Every theme ships a *complete* icon set, and
-that is deliberate. A theme with no `Icons/` directory would write nothing, so
-applying `sunset` and then `default` would leave sunset's icons in the install
-while claiming to be stock. A total overwrite is the only model where switching
-themes cannot leak state. The cost is disk - 1.9 MB across the six shipped sets,
-against a few KB for a delta scheme - and that was an accepted trade.
+**They are not a sparse overlay.** Every theme but `defaultnowarn` ships a
+*complete* icon set, and that is deliberate. (`defaultnowarn` ships one icon,
+1,354 B, and leans on the fill described below.) A theme with no `Icons/`
+directory would write nothing, so applying `sunset` and then `default` would
+leave sunset's icons in the install while claiming to be stock. A total
+overwrite is the only model where switching
+themes cannot leak state. The cost is disk - 1.31 MB across the seven shipped
+sets, against a few KB for a delta scheme - and that was an accepted trade.
 
 A theme that is *not* complete is still safe. Anything it does not ship is
 filled in from the baseline at apply time, so a partial set - an interrupted
@@ -265,7 +267,7 @@ recipe did nothing to them.
 
 - `tdtheme icons diff` decodes and compares **pixels**, which is the honest
   number. `--bytes` skips the decode.
-- `tdtheme list` and `tdtheme status` stay byte-level: decoding all six theme
+- `tdtheme list` and `tdtheme status` stay byte-level: decoding all seven theme
   sets costs 1.8s, and those two are meant to be glanced at. They say "differ
   in bytes" for that reason.
 
@@ -277,7 +279,8 @@ derivation, with the measurements behind it, is in
 summary.
 
 **1. Do not trust the `ExtraSamples` tag.** 95 of the 97 shipped icons declare
-premultiplied alpha - and 23 of those are lying. They contain straight samples.
+premultiplied alpha, and for 23 of the 97 the tag and the samples disagree. The
+tag is metadata about intent; the samples are the image.
 That is decidable rather than a matter of taste: in genuine premultiplied data
 no channel can exceed alpha, so a single pixel with `max(RGB) > alpha` refutes
 the tag, and the 68 genuine cases never violate it. So `read_tiff` decides from
@@ -450,13 +453,13 @@ update to confirm this still holds for that build.
 
 ## Known limitations
 
-- **Icon storage is wasteful by design.** Six complete sets come to 1.9 MB
+- **Icon storage is wasteful by design.** The seven shipped sets come to 1.31 MB
   where a delta scheme would be a few KB. A complete set per theme is what makes
   `apply` a total overwrite and `default` a lossless reset; sharing or
   deduplicating the unchanged icons would reintroduce the leak that design
   avoids. The regenerated sets are 97-128 KB each rather than the stock
   764 KB, because re-encoding drops the Photoshop metadata and re-applies LZW -
-  the bulk of the 1.9 MB is `default`, which copies the baseline verbatim. A
+  the bulk of the 1.31 MB is `default`, which copies the baseline verbatim. A
   partial set no longer leaks the previous theme's icons, so this is a storage
   trade rather than a correctness one - but storage is still the honest reason
   the sets are duplicated.
@@ -482,7 +485,7 @@ update to confirm this still holds for that build.
 - **`ui.tox` is installed whole and never inspected.** There is no way to tell
   from outside TouchDesigner whether a given `ui.tox` is one it will accept, so
   a wrong one shows up as a wrong-looking UI after a restart and nothing else.
-  The 26 other `.tox` files in `Config/System` (the per-dialog ones, `keymanager`,
+  The 22 other `.tox` files in `Config/System` (the per-dialog ones, `keymanager`,
   `menu_op`, `maps`, `midi`) are **not** themed, and could not be by the same
   mechanism without one copy per theme per file - the copy is 1.1 MB each.
 - The other icon-named directories in the install are **not** themed:

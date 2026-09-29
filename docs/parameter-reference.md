@@ -141,8 +141,9 @@ reasonable confidence, even where the individual key is untested.
 
 **Modifier keys generally sit in `TouchOptions`, not `TouchColors` [V].** A
 colour key in `TouchColors` is paired with an *alpha* or *blend mode* in
-`TouchOptions` under a similar name. Examples: `tile.clone.bg` (colour) +
-`tile.clone.alpha` (opacity); `worksheet.grid` (colour) +
+`TouchOptions` under a similar name. Examples: `tile.droppable` (colour) +
+`tile.droppable.alpha` (opacity) + `tile.droppable.blendtype` (blend mode);
+`worksheet.grid` (colour) +
 `worksheet.grid.alpha` (opacity) + `worksheet.grid.blendtype` (blend mode).
 This split is why many visual properties need **two** files edited.
 
@@ -169,7 +170,7 @@ that clashes with an unknown background.
 Seven keys in `TouchColors` are bare operator-type names with no suffix:
 
 ```
-OP  CHOP  COMP  DAT  MAT  POP  SOP  TOP
+CHOP  COMP  DAT  MAT  POP  SOP  TOP
 ```
 
 These are the **base hues** for node tiles. Only seven exist; `OP` itself has
@@ -386,8 +387,9 @@ YAML rather than reaching for `--force`.
 
 ### 9.4 `validate` cannot see semantic mistakes
 
-It checks four things: tile geometry at zero, size keys against the baseline,
-unknown keys, and colour-channel field integrity (§9.3). It cannot tell that a
+It checks five things: tile geometry at zero, size keys against the baseline,
+unknown keys, colour-channel field integrity (§9.3), and a theme setting both
+`X` and `default.X` (§3 rule 3, §6.8). It cannot tell that a
 colour is illegible against its background, that two keys should have been
 changed together (§5.4), or that a value is a typo for another key.
 
@@ -398,7 +400,7 @@ independently, by `validate_icons`, and a theme can have a structurally perfect
 colour store and still ship a wrong or incomplete icon set. `tdtheme apply` runs
 both and refuses to write if either reports an error.
 
-`validate_icons` checks four things, and like the colour pass it cannot see
+`validate_icons` checks five things, and like the colour pass it cannot see
 semantics:
 
 | Check | Severity | Catches |
@@ -407,7 +409,7 @@ semantics:
 | every file decodes as TIFF | error | a file TouchDesigner cannot read at all — it logs "Couldn't find icon" and draws nothing |
 | dimensions match the baseline | error | a resized glyph; TouchDesigner sizes most of these from the file, so it renders visibly wrong |
 | a name is not in the baseline | warning | a new icon, or one from a different TouchDesigner build — it will be written, but nothing here can vouch for it |
-| a baseline icon is missing from the theme | warning | harmless (the icon keeps its shipped bytes) but almost always means the set was generated from a stale baseline |
+| a baseline icon is missing from the theme | warning | harmless (the icon keeps its baseline bytes) but almost always means the set was generated from a stale baseline |
 
 Two limits worth stating. The decode check confirms the *file* is readable, not
 that it looks right: an icon whose alpha convention is wrong decodes cleanly and

@@ -1,10 +1,33 @@
 # Icon storage: a design note
 
-**Status: not implemented.** Nothing in this document has been built. It
-records a proposal, the measurements behind it, and the decisions already
-taken, so the next person does not have to re-derive them. Where this document
-and the code disagree, the code is the current behaviour and this document is
-a stale idea.
+**Status: step 1 shipped; steps 2–5 still open.** This is no longer wholly
+unimplemented. §5 step 1 — a theme may hold a *subset* of the icon set, with
+the baseline supplying the rest — is built and in daily use. It landed as four
+commits: `68be6d4` (`tdicons.copy_icons` grew `fill_from`, and
+`tdtheme._apply_icon_set` passes `fill_from=baseline_icons_dir()`), `179a3b0`
+(`tests/test_icons.py` asserts a *subset* rather than equality, so a partial set
+is legal), `8e68276` (the shortfall finding shortened to two counts and a
+source), and `bc0ab02` (`defaultnowarn` cut down to a single icon). Steps 2–5 —
+materialise on demand, untrack the committed TIFFs, a recipe-writing importer,
+and close the two `match`/recolour footguns — remain a proposal.
+
+The worked example is `themes/defaultnowarn`: it ships **one** icon,
+`WarnFace.tiff` at 1,354 B, and depends on the fill for the other 96. It is
+committed, so the behaviour is exercised by a real theme and not only by a
+test.
+
+**One deliberate deviation from the proposal.** §5 step 1 was written as "stop
+treating a missing icon as a warning", and that did not happen. The direction
+of travel is the opposite: a missing icon is a **warning**, aggregated into a
+single finding, and the set is **filled from the baseline**. It did not go from
+warn to silent. `apply` gates on errors only, so the warning is informational
+and the fill is what makes a partial set safe — `tests/test_icons.py:369-372`
+pins exactly that.
+
+Everything else in this document is still the unimplemented proposal. It
+records the measurements behind it and the decisions already taken, so the next
+person does not have to re-derive them. Where this document and the code
+disagree, the code is the current behaviour and this document is a stale idea.
 
 The question was: themes currently store all 97 icons, and it would be nicer
 if icons were stored the way `TouchColors` and `TouchOptions` are — sparsely,
@@ -31,17 +54,22 @@ captured baseline, and an absent key means *reset to baseline* because
 | `mono` | 460 | 626 |
 | `bnw` | 419 | 626 |
 
-**Icons do not have that property.** Every real icon theme changes all 97
-glyphs:
+**Icons do not have that property.** Every regenerated theme repaints almost
+all 97 glyphs, and `defaultnowarn` repaints the single one it still ships:
 
 | theme | recipe | `Icons/` | ratio | icons changed |
 |---|---|---|---|---|
 | `default` | 662 B | 782 520 B | 1182× | 0 / 97 |
-| `defaultnowarn` | 662 B | 782 328 B | 1182× | 1 / 97 |
-| `midnight` | 2 467 B | 127 946 B | 52× | 97 / 97 |
+| `defaultnowarn` | 1 611 B | 1 354 B | 0.8× | 1 / 97 |
+| `midnight` | 2 576 B | 127 946 B | 50× | 97 / 97 |
 | `sunset` | 1 680 B | 127 566 B | 76× | 97 / 97 |
 | `mono` | 1 563 B | 106 152 B | 68× | 97 / 97 |
-| `bnw` | 2 106 B | 101 363 B | 48× | 97 / 97 |
+| `bnw` | 2 162 B | 101 363 B | 47× | 97 / 97 |
+| `pink` | 7 896 B | 121 801 B | 15× | 94 / 97 |
+
+`defaultnowarn`'s ratio is below 1 because it now ships one icon: its recipe is
+larger than the set it produces, which is the clearest single illustration of
+why a sparse *storage* model was worth building.
 
 So a per-icon sparse overlay in the `TouchColors.yaml` mould — one line per
 changed glyph, absent meaning baseline — would store exactly as much as the
@@ -70,8 +98,8 @@ literal names — it carries a long `_comment` explaining the design, and
 `merge(baseline, {}) == baseline` does for the stores. `default`'s reset is
 already correct and already byte-exact.
 
-It is also 48–1182× smaller than the binaries it produces. Across all six
-themes: **9 140 B of recipe versus 2 027 875 B of committed TIFFs.**
+It is also 15–1182× smaller than the binaries it produces. Across all seven
+themes: **18 150 B of recipe versus 1 368 702 B of committed TIFFs.**
 
 An icon that matches no op is copied from the baseline verbatim, so the recipe
 already has the "absent means baseline" semantics too. Measured: a recipe whose
@@ -173,11 +201,13 @@ Each step is independently useful and independently revertible. None requires
 step 2, and step 1 is the one that actually saves space.
 
 1. **Stop treating a missing icon as a warning, and stop requiring a complete
-   set.** `validate_icons` currently warns when a theme lacks a baseline icon,
-   and `tests/test_icons.py` asserts that every theme ships all 97 names.
-   Relax both so a theme may hold a subset, with the baseline supplying the
-   rest. This alone is the storage change; the committed directories can stay
-   exactly as they are, so it is a no-op on disk and a safe first commit.
+   set.** — **SHIPPED, but not in the direction proposed.** `validate_icons`
+   warns when a theme lacks a baseline icon, and `tests/test_icons.py` asserts
+   a *subset* rather than all 97 names, so a theme may hold a subset with the
+   baseline supplying the rest. The warning was **kept**, not removed: the fill
+   is what makes a partial set safe, and `apply` gates on errors only, so what
+   shipped is warn-and-fill rather than silence. The commits and the worked
+   example — `themes/defaultnowarn`, one icon — are in the header.
 2. **Add a `icons materialise` / on-demand build path** so `apply` can populate
    the install from `baseline ∪ theme` without the theme carrying every file.
    `default` needs nothing: its absent icons all come from the baseline, which

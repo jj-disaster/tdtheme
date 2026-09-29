@@ -246,8 +246,9 @@ means codes written at 12 bits are read back at 13.
 icons *declare* premultiplied (associated) alpha. Two separate traps live here,
 and this project fell into both before getting it right.
 
-*On reading: the tag lies.* 23 of those 95 contain **straight** samples. The
-mistake is decidable, not a judgement call: in genuine premultiplied data no
+*On reading: the tag lies.* For 23 of the 97 icons the tag and the samples
+disagree. The mistake is decidable, not a judgement call: in genuine
+premultiplied data no
 channel can exceed alpha, so one pixel with `max(RGB) > alpha` refutes the tag.
 `Bypass.tiff` violates that on 98 of 102 partial-alpha pixels; the 68 genuine
 cases violate it zero times. Un-premultiplying on the strength of the tag alone
