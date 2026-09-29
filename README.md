@@ -28,16 +28,28 @@ list of themes, you are installed and can stop reading.
 
 ### Put it on your PATH (optional)
 
-The wrapper resolves its own location, so it works from any directory without
-this step. To drop the `./`:
+The wrapper resolves its own location, so `cd`-ing into the checkout always
+works. To drop the `./` and run it from anywhere, use the setup script — it
+picks a directory it can actually write to and tells you what it chose:
 
 ```sh
-ln -s "$PWD/tdtheme" /opt/homebrew/bin/tdtheme
+./setup
 ```
 
-Use `/usr/local/bin/tdtheme` instead if that is where your `PATH` looks — Apple
-Silicon Homebrew installs to `/opt/homebrew/bin`, Intel to `/usr/local/bin`. If
-neither exists, `mkdir -p` one you can write to, or skip this step entirely.
+It links `tdtheme`, `tdthememaker` and `check-td-writes` together, because the
+second two are the companions you want in the same place anyway and both hit
+the same `permission denied` problems. Other flags:
+
+```sh
+./setup --check              # report what it would do, change nothing
+./setup --uninstall          # remove the links it made
+./setup "$HOME/.local/bin"   # put them somewhere specific
+SETUP_DEBUG=1 ./setup        # trace every probe it makes
+```
+
+If it picks a directory that is not on your `PATH`, it prints the `export` line
+to add. That is not a failure — the links are correct, they just need one line
+in your shell rc before the bare name resolves.
 
 **A symlink, not a copy.** `tdtheme` has no dependencies to resolve, and it reads
 `themes/` and `baseline/` from the repository it lives in. A symlink keeps one
@@ -52,23 +64,40 @@ cd ~
 tdtheme apply midnight
 ```
 
-The two companion tools can be linked the same way. `check-td-writes` is
-symlinked under its own name; `tdthememaker` needs a different filename, because
-the package directory inside the repo already owns that name:
+`tdthememaker` needs a different installed filename than its repo directory
+(`tdthememaker-cli`), because the package directory already owns the name
+`tdthememaker`. `setup` handles that rename for you.
 
-```sh
-ln -s "$PWD/tdthememaker-cli" /opt/homebrew/bin/tdthememaker
-```
+### If `setup` reports `permission denied` for a link you did not create
+
+It refuses rather than guessing, and tells you which of the two causes it found.
+Both produce the identical `zsh: permission denied` from a link that looks
+perfectly well formed, which is why the script checks for both:
+
+- **The file behind the link is not executable.** Git records the exec bit so a
+  clone keeps it, but exFAT, cloud sync and zip all drop it. `setup` restores it
+  and says so.
+- **Something is a directory where the link goes.** `ln -s` does not fail when
+  that happens; it nests the link *inside* the directory, and `PATH` then finds
+  a directory where a command should be. Executing a directory is `EACCES` — the
+  same error, a completely different cause. `setup` refuses, and if the
+  directory is empty it gives you the `rm -rf` to fix it. If it is **not**
+  empty it will not touch it.
 
 ### If it says `no python3 found`
 
 You do not need to install Python. TouchDesigner already ships a full CPython
 3.11, and the wrapper falls back to it automatically — it only complains if
 *neither* a working `python3` on your `PATH` *nor* TouchDesigner can be found.
+`setup` checks this before it creates any links, so it will not leave you with
+three commands that cannot run.
 
 The case that trips people up is a Mac without the Command Line Tools, where
 `/usr/bin/python3` exists but is only a 118 KB stub that opens a GUI installer
-instead of running. If you would rather have a real `python3`:
+instead of running. The fallback covers the case where no `python3` is on your
+`PATH` at all; a stub that is *present but unrunnable* still fails, because
+`PATH` lookup stops at the first match. If you hit that, either install the real
+thing or move TouchDesigner so the script can find it:
 
 ```sh
 xcode-select --install
@@ -141,7 +170,7 @@ Format details that matter, all verified rather than assumed:
 
 | Command | What it does |
 |---|---|
-| `capture` | snapshot the installed files and icons as the baseline (refuses to clobber; `--force`; `--local` for a private one) |
+| `capture` | snapshot the installed files and icons as the baseline (refuses to clobber; `--local` for a private one, or `--force --i-know-this-is-shared` to replace the committed copy) |
 | `list` | list themes; `*` marks the last one applied |
 | `status` | TouchDesigner build, baseline, whether TD is running, per-file drift |
 | `diff NAME` | show exactly what a theme changes, old value vs new |

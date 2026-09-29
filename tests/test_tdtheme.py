@@ -10,6 +10,8 @@ Run:  python3 tests/test_tdtheme.py
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -22,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import cli as tdtheme_cli
 import tdtheme as T
 
 
@@ -798,6 +801,32 @@ try:
 except T.ThemeError as exc:
     check("--force" in str(exc), "clobber refusal points at --force")
 
+# `capture --force` against the *committed* baseline is a change every other
+# user of the checkout inherits, and `git add -A` is the accident that commits
+# 2.2 MB of one machine's build. So `--force` alone is not the whole
+# acknowledgement: it only says "overwrite something", which is equally true of
+# the private shadow, so it cannot distinguish the two destinations.
+#
+# This was broken: the refusal named `--force` as the way forward while refusing
+# `--force`, so the documented escape did not exist. Both halves are pinned.
+_shared = T.baseline_shipped_dir
+_unchanged = {p: p.read_bytes() for p in sorted(_shared.rglob("*")) if p.is_file()}
+with contextlib.redirect_stderr(io.StringIO()) as refusal:
+    code = tdtheme_cli.main(["capture", "--force"])
+check(code == tdtheme_cli.EXIT_ERROR, f"capture --force alone is refused ({code})")
+check("--local" in refusal.getvalue() and "baseline.local" in refusal.getvalue(),
+      "and the refusal names the private path, which needs no acknowledgement")
+check("--i-know-this-is-shared" in refusal.getvalue(),
+      "and names the explicit acknowledgement, not the flag that was just refused")
+check(all(p.read_bytes() == b for p, b in _unchanged.items()),
+      "and the committed baseline is byte-identical afterwards")
+
+with contextlib.redirect_stdout(io.StringIO()):
+    code = tdtheme_cli.main(["capture", "--force", "--i-know-this-is-shared"])
+check(code == 0, f"capture --force --i-know-this-is-shared is how you say it "
+      f"deliberately ({code})")
+T.capture(force=True)   # put the committed fixture back for the checks below
+
 check((T.baseline_dir / T.TOUCHCOLORS).read_bytes()
       == (install / T.TOUCHCOLORS).read_bytes(),
       "baseline bytes match the install exactly")
@@ -928,10 +957,9 @@ check(not [f for f in T.plan("e2e")["findings"]], "the e2e theme validates with 
 # `icons_available()` is False for every check above and the icon half of apply
 # has never run in any test. A reset that quietly skipped the icons would leave
 # the install looking themed, and would have passed every check in this file.
-import contextlib
-import io
-
-import cli as tdtheme_cli
+# (`contextlib`, `io` and `cli` are imported at the top now: the capture checks
+# above need them, and an import placed mid-file for the benefit of only the
+# later checks is a trap for whoever adds a check earlier in the file.)
 
 # The real shipped reset theme, not a hand-rolled stand-in: `themes_dir` points
 # at tmp, and the point is that the theme that ships is the one that resets.
@@ -1384,6 +1412,261 @@ not_runnable = subprocess.run(
 check(not_runnable.returncode != 0,
       f"a python3 on PATH that cannot run is not silently trusted "
       f"(exit {not_runnable.returncode})")
+
+# ------------------------------------------------------------------- setup
+#
+# `setup` is the one-shot installer, and it exists because of the two ways an
+# installed `tdtheme` can answer "permission denied" while the symlink looks
+# fine. Both are reproduced here, because both were found on a real machine
+# rather than reasoned about, and a test that only covers the happy path would
+# have shipped both bugs.
+SETUP = PROJECT / "setup"
+check(SETUP.is_file() and os.access(SETUP, os.X_OK),
+      "the ./setup installer exists and is executable")
+
+
+def run_setup(args, bin_dir, path=None, debug=False):
+    """Run setup against a scratch bin dir, never the real one."""
+    return subprocess.run(
+        [str(SETUP), *args, str(bin_dir)], capture_output=True, text=True,
+        cwd=away, env={**os.environ, "PATH": path or os.environ["PATH"],
+                       "SETUP_DEBUG": "1" if debug else "0"})
+
+
+def fresh_checkout(name):
+    """A private copy of the repo, so a mode or a link can be broken safely."""
+    dest = tmp / name
+    shutil.copytree(PROJECT, dest, ignore=shutil.ignore_patterns(
+        ".git", "__pycache__", "backups", "baseline.local", "testiconsforagents"))
+    return dest
+
+
+# The happy path. Also the idempotence check, because a setup script people run
+# twice must not become the thing that breaks their install.
+s_bin = tmp / "setup-bin"
+s_bin.mkdir(parents=True, exist_ok=True)
+s_repo = fresh_checkout("setup-happy")
+first = subprocess.run([str(s_repo / "setup"), str(s_bin)],
+                       capture_output=True, text=True, cwd=str(s_repo),
+                       env={**os.environ, "SETUP_DEBUG": "0"})
+check(first.returncode == 0, f"setup succeeds from a clean checkout "
+      f"(exit {first.returncode}: {first.stderr.strip()[:70]})")
+for name, source in (("tdtheme", "tdtheme"), ("tdthememaker", "tdthememaker-cli"),
+                     ("check-td-writes", "check-td-writes")):
+    link = s_bin / name
+    check(link.is_symlink() and os.readlink(link) == str(s_repo / source),
+          f"setup links {name} -> {source}")
+check((s_bin / "tdtheme").is_file() and os.access(s_bin / "tdtheme", os.X_OK),
+      "and the link resolves to something executable")
+
+second = subprocess.run([str(s_repo / "setup"), str(s_bin)],
+                        capture_output=True, text=True, cwd=str(s_repo),
+                        env={**os.environ, "SETUP_DEBUG": "0"})
+check(second.returncode == 0 and "already linked" in second.stdout,
+      f"and running it again is a no-op, not a second link "
+      f"(exit {second.returncode})")
+
+# Failure mode 1: the exec bit lost in transfer. Git records it, so a clone keeps
+# it - but exFAT, a cloud sync and a zip all drop it, and the symptom is zsh
+# saying "permission denied" about a link that is perfectly well formed.
+lost = fresh_checkout("setup-noexec")
+(lost / "tdtheme").chmod(0o644)
+check(not os.access(lost / "tdtheme", os.X_OK), "test setup: the exec bit is gone")
+r = subprocess.run([str(lost / "setup"), str(s_bin)], capture_output=True,
+                   text=True, cwd=str(lost), env={**os.environ, "SETUP_DEBUG": "0"})
+check(r.returncode == 0 and os.access(lost / "tdtheme", os.X_OK),
+      f"setup restores the executable bit and then succeeds "
+      f"(exit {r.returncode}: {r.stderr.strip()[:60]})")
+check("restoring the executable bit" in r.stdout,
+      "and says that it did, rather than fixing it silently")
+
+# Failure mode 2, and the sneakier of the two: `ln -s target dir/name` does not
+# fail when dir/name is already a directory, it nests the link inside it. PATH
+# then finds a directory where a command should be, and exec'ing a directory is
+# EACCES - the same "permission denied" as mode 1, for a completely different
+# reason. This was reported from a real machine.
+shadowed = fresh_checkout("setup-shadowed")
+d_bin = tmp / "setup-dir-bin"
+d_bin.mkdir(parents=True, exist_ok=True)
+(d_bin / "tdtheme").mkdir()          # a directory already owns the name
+r = subprocess.run([str(shadowed / "setup"), str(d_bin)], capture_output=True,
+                   text=True, cwd=str(shadowed), env={**os.environ, "SETUP_DEBUG": "0"})
+check(r.returncode != 0, f"setup refuses rather than nesting a link inside it "
+      f"(exit {r.returncode})")
+check("is a directory" in r.stderr,
+      f"and says what it found ({r.stderr.strip()[:80]!r})")
+check("permission denied" in r.stderr,
+      "and connects it to the error the user actually sees")
+check(not (d_bin / "tdtheme" / "tdtheme").exists(),
+      "and did not create the nested link ln -s would have made silently")
+check("rm -rf" in r.stderr, "and gives the exact command to recover")
+# An empty directory is unambiguous, so the advice is that removing it is safe.
+check("safe" in r.stderr, "and says the empty directory is safe to remove")
+
+# A directory that is NOT empty is someone else's data, and must not be removed
+# or called safe.
+busy_bin = tmp / "setup-busy-bin"
+busy_bin.mkdir(parents=True, exist_ok=True)
+(busy_bin / "tdtheme").mkdir()
+(busy_bin / "tdtheme" / "important.txt").write_text("not ours\n")
+r = subprocess.run([str(shadowed / "setup"), str(busy_bin)], capture_output=True,
+                   text=True, cwd=str(shadowed), env={**os.environ, "SETUP_DEBUG": "0"})
+check(r.returncode != 0 and (busy_bin / "tdtheme" / "important.txt").exists(),
+      "a non-empty directory is left completely alone")
+check("NOT empty" in r.stderr, "and is not described as safe to remove")
+
+# A link pointing at a different checkout is a stale install, and the failure it
+# causes - a command that runs the wrong themes - is invisible until it matters.
+stale_bin = tmp / "setup-stale-bin"
+stale_bin.mkdir(parents=True, exist_ok=True)
+elsewhere = fresh_checkout("setup-elsewhere")
+(stale_bin / "tdtheme").symlink_to(elsewhere / "tdtheme")
+r = subprocess.run([str(s_repo / "setup"), str(stale_bin)], capture_output=True,
+                   text=True, cwd=str(s_repo), env={**os.environ, "SETUP_DEBUG": "0"})
+check(r.returncode == 0 and os.readlink(stale_bin / "tdtheme") == str(s_repo / "tdtheme"),
+      f"a link to another checkout is repointed ({r.returncode})")
+check("replacing it" in r.stdout, "and the swap is reported, not silent")
+
+# --check must not touch anything. A "what would you do" flag that writes is
+# worse than not having it.
+probe_bin = tmp / "setup-probe-bin"
+probe_bin.mkdir(parents=True, exist_ok=True)
+r = subprocess.run([str(s_repo / "setup"), "--check", str(probe_bin)],
+                   capture_output=True, text=True, cwd=str(s_repo),
+                   env={**os.environ, "SETUP_DEBUG": "0"})
+check(r.returncode == 0 and not list(probe_bin.iterdir()),
+      f"--check changes nothing ({r.returncode})")
+check("would be created" in r.stdout, "and says what it would have done")
+
+# --uninstall removes only what setup made. Someone else's link under the same
+# name is left for them.
+keep_bin = tmp / "setup-keep-bin"
+keep_bin.mkdir(parents=True, exist_ok=True)
+(keep_bin / "tdtheme").symlink_to(elsewhere / "tdtheme")
+r = subprocess.run([str(s_repo / "setup"), "--uninstall", str(keep_bin)],
+                   capture_output=True, text=True, cwd=str(s_repo),
+                   env={**os.environ, "SETUP_DEBUG": "0"})
+check((keep_bin / "tdtheme").is_symlink(), "--uninstall leaves a foreign link alone")
+check("pointing elsewhere" in r.stdout or "not a symlink" in r.stdout,
+      "and says why it left it")
+
+# The interpreter preflight runs before anything is created, so a machine with
+# no python3 is not left with three commands that cannot run.
+no_py_repo = fresh_checkout("setup-nopy")
+no_py_bin = tmp / "setup-nopy-bin"
+no_py_bin.mkdir(parents=True, exist_ok=True)
+_no_py = no_py_repo / "setup"
+# Point the TouchDesigner fallback at a path that cannot exist, so the machine
+# looks like it has neither a working PATH python3 nor TouchDesigner.
+_text = _no_py.read_text().replace(
+    "/Applications/TouchDesigner.app", "/nonexistent/TouchDesigner.app")
+_no_py.write_text(_text)
+os.chmod(_no_py, 0o755)
+_bare = tmp / "setup-bare-bin"   # coreutils only, no interpreter
+_bare.mkdir(parents=True, exist_ok=True)
+for _u in ("ls", "sed", "chmod", "ln", "readlink", "dirname", "rm", "mkdir",
+           "mktemp", "command", "stat", "cp"):
+    _real = shutil.which(_u)
+    if _real:
+        (_bare / _u).symlink_to(_real)
+r = subprocess.run([str(_no_py), str(no_py_bin)], capture_output=True, text=True,
+                   cwd=str(no_py_repo),
+                   env={**os.environ, "PATH": str(_bare), "SETUP_DEBUG": "0"})
+check(r.returncode != 0, f"setup refuses with no usable interpreter ({r.returncode})")
+check("python3" in r.stderr, "and names the missing interpreter")
+check("xcode-select" in r.stderr, "and gives a command that fixes it")
+check(not list(no_py_bin.iterdir()),
+      "and creates nothing, rather than three commands that cannot run")
+
+# The verification must not be satisfiable by some other tdtheme further down
+# PATH, and it must still run when a link is present but broken. Getting here
+# needs a *symlink* at the name, not a directory: the preflight refuses a
+# directory before any link work, which is the right order but means the
+# directory case above never reaches the verification block at all. So this
+# builds the situation the verification exists for - a link whose target does
+# not run - and checks it is caught.
+v_repo = fresh_checkout("setup-verify")
+v_bin = tmp / "setup-verify-bin"
+v_bin.mkdir(parents=True, exist_ok=True)
+# A symlink to a working command somewhere else on PATH. Install correctly
+# repoints this, so the run itself is not the test - the test is that a *broken*
+# link is caught, which needs the link to stay broken. A directory cannot be
+# used: the preflight refuses it before any link work, which is the right order
+# but leaves nothing for the verification block to catch.
+#
+# So: point the link at a file that exists, is not executable, and that setup
+# has no reason to repair - outside the checkout entirely. An earlier version
+# used cli.py, and setup's exec-bit repair then made it runnable, so the test
+# passed for the wrong reason. A fixture the tool under test can edit is not a
+# fixture.
+_not_exec = tmp / "not-executable"
+_not_exec.write_text("#!/bin/sh\nexit 0\n")
+os.chmod(_not_exec, 0o644)
+(v_bin / "tdtheme").symlink_to(_not_exec)
+check((v_bin / "tdtheme").is_symlink() and not os.access(v_bin / "tdtheme", os.X_OK),
+      "test setup: a resolvable but non-executable link is in place")
+r = subprocess.run([str(v_repo / "setup"), str(v_bin)], capture_output=True,
+                   text=True, cwd=str(v_repo), env={**os.environ, "SETUP_DEBUG": "0"})
+# Install repointed it, so the run is expected to succeed. What matters is that
+# it succeeded *by fixing the link*, not by running something else: a real
+# tdtheme, on this machine, is already installed at /opt/homebrew/bin, so a
+# check that ran `tdtheme` by name would pass even if the link were a directory.
+check(r.returncode == 0, f"a stale link is repaired, and that succeeds "
+      f"({r.returncode})")
+check("replacing it" in r.stdout, "and the repair is reported")
+
+# Now the property that actually matters, tested directly: the verification must
+# be running the link, not a name. Replace the link with a directory *after* the
+# script's preflight has already been satisfied is not possible from outside, so
+# the check is made where it can be: a link whose target is not runnable, with
+# the run stopped from repairing it. `--check` never repairs, so the link is
+# still broken when the script is done with it.
+dead_bin = tmp / "setup-dead-bin"
+dead_bin.mkdir(parents=True, exist_ok=True)
+(dead_bin / "tdtheme").symlink_to(_not_exec)
+r = subprocess.run([str(v_repo / "setup"), "--check", str(dead_bin)],
+                   capture_output=True, text=True, cwd=str(v_repo),
+                   env={**os.environ, "SETUP_DEBUG": "0"})
+check("would be created" in r.stdout or "->" in r.stdout,
+      "--check reports a stale link rather than acting on it")
+check(os.readlink(dead_bin / "tdtheme") == str(_not_exec),
+      "and left the broken link exactly as it found it")
+
+# The bug this whole design is guarding against, tested the way it happened.
+# Verification that runs `tdtheme` by name is answered by whatever is first on
+# PATH, so a healthy tdtheme somewhere earlier makes a broken link look fine.
+# The first version of this check did exactly that and reported success against
+# a directory sitting where the link should be.
+decoy_dir = tmp / "setup-decoy-bin"
+decoy_dir.mkdir(parents=True, exist_ok=True)
+_decoy = decoy_dir / "tdtheme"
+_decoy.write_text("#!/bin/sh\nexit 0\n")     # a perfectly healthy command
+os.chmod(_decoy, 0o755)
+shadow_bin = tmp / "setup-shadow-bin"
+shadow_bin.mkdir(parents=True, exist_ok=True)
+(shadow_bin / "tdtheme").mkdir()              # ... and a directory at the real spot
+r = subprocess.run([str(v_repo / "setup"), str(shadow_bin)], capture_output=True,
+                   text=True, cwd=str(v_repo),
+                   env={**os.environ, "SETUP_DEBUG": "0",
+                        # The decoy is first on PATH, exactly as an unrelated
+                        # install would be.
+                        "PATH": f"{decoy_dir}:{os.environ['PATH']}"})
+check(r.returncode != 0,
+      f"a healthy tdtheme earlier on PATH cannot satisfy verification "
+      f"(exit {r.returncode})")
+check("is a directory" in r.stderr,
+      "and the real obstruction is reported instead of a pass")
+
+# A directory that is on PATH but not writable must be skipped rather than
+# escalated to sudo, and the choice must be reported.
+probe = subprocess.run([str(SETUP), "--check"], capture_output=True, text=True,
+                       cwd=str(PROJECT), env={**os.environ, "SETUP_DEBUG": "1",
+                                               "HOMEBREW_BIN": "/nonexistent"})
+check("bin dir" in probe.stdout,
+      f"setup chooses a directory without being told one "
+      f"({probe.stdout.strip()[:60]!r})")
+check("skipping" in probe.stderr or "chose" in probe.stderr,
+      "and traces the probes it made when asked to")
 
 # ---------------------------------------------------------------- cleanup
 

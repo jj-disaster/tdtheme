@@ -110,9 +110,77 @@ shadow made them differ.
 `baseline/` is tracked, so re-capturing from a build nobody else runs is a change
 every user of the checkout inherits. `--local` is the private path and is
 gitignored. `cmd_capture` refuses `--force` against the committed baseline
-unless `--local` is also passed, and says both options in the refusal. A
-refusal, not a warning, because the whole cost here is the one accident the flag
-is meant to prevent: `git add -A` committing 2.2 MB of one machine's build.
+unless `--i-know-this-is-shared` is *also* passed, and says both options in the
+refusal. A refusal, not a warning, because the whole cost here is the one
+accident the flag is meant to prevent: `git add -A` committing 2.2 MB of one
+machine's build.
+
+**The extra flag is load-bearing, and it is not `--force` again.** `--force` only
+says "overwrite *something*", which is equally true of the private shadow, so it
+cannot by itself mean "the shared one". The first version refused `--force` and
+then offered `--force` as the way out, which made the documented escape a loop
+and the command impossible to run on purpose. The refusal must never repeat the
+flag it is refusing. `tests/test_tdtheme.py` pins all three halves: `--force`
+alone is refused, the message names `--local` and the acknowledgement, and the
+committed baseline is byte-identical afterwards. Note the guard only fires when
+the *active* baseline is the committed one — with `baseline.local/` in place,
+`capture --force` writes the shadow and needs no acknowledgement.
+
+## `setup` is POSIX sh, and its two refusals are the point
+
+`./setup` installs the three commands as symlinks. It exists because a working
+checkout plus a correct `ln -s` still produces `zsh: permission denied` two
+different ways, and both were found on a real machine rather than reasoned about.
+
+- **The file behind the link lost its exec bit.** Git records the mode, so a
+  clone keeps it; exFAT, cloud sync and zip do not. `setup` chmods the wrappers
+  back and *reports* it, because a silent repair is a repair nobody learns to
+  trust.
+- **A directory already owns the name.** `ln -s target dir/name` does **not**
+  fail when `dir/name` is a directory — it nests the link inside it. `PATH` then
+  resolves the name to a directory, and exec'ing a directory is `EACCES`, so the
+  user sees the *identical* error for a completely different reason. `setup`
+  refuses. It offers `rm -rf` only when the directory is **empty**, and says it
+  is safe; when it is not empty it says so and touches nothing.
+
+Four properties that are load-bearing rather than stylistic, each pinned in
+`tests/test_tdtheme.py`:
+
+- **The preflight runs over all three names before the first `ln`.** Installing
+  two of three and then reporting a problem *is* the half-done state, and it
+  makes the closing "nothing was left half-done" line a lie. The interpreter
+  check is part of this: a machine with no working `python3` must not be left
+  holding three commands that cannot run.
+- **Verification runs the link by absolute path, with `PATH` set to the target
+  directory alone.** The first version ran `tdtheme` by name against the
+  inherited `PATH` and reported success while the link was a directory — an
+  unrelated `tdtheme` further down `PATH` answered the question. A decoy
+  `tdtheme` earlier in `PATH` is the regression test for this.
+- **A stale symlink is replaceable; a directory or file is not.** A link
+  pointing at another checkout is a broken install, and `--uninstall` can undo
+  it. Anything else was not put there by this tool, and deleting it is not the
+  script's decision.
+- **All failure text goes to stderr; only progress and success go to stdout.**
+  The explanation has to survive `2>/dev/null` and stay attached to the failure
+  in a pipeline. A diagnostic that is only on stdout is one redirect from being
+  invisible.
+
+**"not on your `PATH`" is not a failure.** `./setup ~/.local/bin` on a fresh
+machine has done its entire job when the links exist; it prints the `export`
+line and exits 0. Counting it as a problem would make a correct install report a
+non-zero exit and a scary summary.
+
+**Stream helpers are not interchangeable.** `say`/`ok`/`step` → stdout,
+`why`/`bad` → stderr, `info` for neutral progress notes. When adding output,
+decide which one it is: if the reader only wants it when something has already
+gone wrong, it is `why`.
+
+Two bugs in this file that a test did not catch and a human did, both from
+`sh`: a missing `return 0` in a `for` loop over candidate directories (the loop
+fell through to its own `return 1`, so a writable directory that *was* on
+`PATH` reported as no writable directory at all), and a helper whose exit status
+leaked into a `$(...)`. In shell, **a function's last command decides its
+status**, and a `[ ... ] && printf` that does not run returns 1.
 
 ## Backups are opt-in, and re-applying is the recovery path
 

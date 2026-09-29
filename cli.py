@@ -73,17 +73,26 @@ def _icon_line(theme: str) -> str:
 
 def cmd_capture(args) -> int:
     # `baseline/` is tracked, so overwriting it is a change every other user of
-    # this checkout inherits. `--force` already says "I meant it", and --local is
-    # the way to not mean it. Between the two, the shared file is only replaced
-    # when the ask was unambiguous.
+    # this checkout inherits, and `git add -A` is exactly the accident that
+    # commits 2.2 MB of one machine's build. `--force` only says "overwrite
+    # *something*", which is true of the private shadow too, so it cannot be the
+    # whole acknowledgement on its own. `--i-know-this-is-shared` is.
+    #
+    # The refusal names both ways forward, and neither of them is the flag the
+    # user just typed: `--force` alone is refused, which is the whole point, so
+    # repeating it in the message would be a loop.
     if args.force and not args.local and T.baseline_dir == T.baseline_shipped_dir:
-        print("Refusing: this overwrites the committed baseline, which every "
-              "other user of this checkout diffs against.\n"
-              "  --force   replace it anyway\n"
-              f"  --local   capture into {T.baseline_shadow_dir.name}/ instead, and "
-              "leave it alone",
-              file=sys.stderr)
-        return EXIT_ERROR
+        if not args.i_know_this_is_shared:
+            print("Refusing: --force here would overwrite the committed "
+                  "baseline/, which every other user of this checkout diffs "
+                  "against.\n"
+                  "  --local   capture into "
+                  f"{T.baseline_shadow_dir.name}/ instead and leave it alone - "
+                  "the right answer unless you mean to change the shared copy\n"
+                  "  --i-know-this-is-shared   ... and yes, replace baseline/ for "
+                  "everyone (with --force)",
+                  file=sys.stderr)
+            return EXIT_ERROR
 
     written = T.capture(force=args.force, into_shadow=args.local)
     # The directory the icons actually went to, which is the shadow when
@@ -447,6 +456,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="capture into baseline.local/ (gitignored) instead of the "
                         "committed baseline/, and use it from then on - the right "
                         "choice on a TouchDesigner build other than the shipped one")
+    p.add_argument("--i-know-this-is-shared", action="store_true",
+                   help="with --force, confirm the committed baseline/ should be "
+                        "replaced, so every other user of this checkout inherits "
+                        "your build's capture")
     p.set_defaults(func=cmd_capture)
 
     p = sub.add_parser("list", help="list available themes")

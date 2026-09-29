@@ -1,0 +1,480 @@
+#!/bin/sh
+# Put tdtheme, tdthememaker and check-td-writes on your PATH.
+#
+# Run it once, from inside the checkout:
+#
+#     ./setup
+#
+# It links rather than copies, on purpose. This tool has no dependencies to
+# resolve and it reads themes/ and baseline/ from the repository it lives in, so
+# a symlink keeps one copy of your theme data and always reflects the current
+# checkout. An installed copy would be a second, silently-drifting copy of the
+# same themes, and `apply` would install from whichever one it found first.
+#
+# Everything it does is reversible, and everything it changes it reports. The
+# exit status is 0 only if all three links are in place and `tdtheme status`
+# runs from the installed name.
+#
+# Usage:
+#   ./setup              link into the best directory, and verify
+#   ./setup --check      report what it would do, change nothing
+#   ./setup --uninstall  remove the links it created
+#   ./setup DIR          link into DIR instead of choosing one
+#
+# Debug output: set SETUP_DEBUG=1 for a trace of every probe, including the ones
+# that succeeded. The default is quiet on success and loud on failure.
+# -- help text ends here --
+
+set -u
+
+# ---------------------------------------------------------------- locating us
+#
+# $0 is the symlink, not this file, when we have been linked ourselves. Follow
+# the chain to the real file, the same way the wrappers do. macOS has no
+# `readlink -f`, hence the loop.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname -- "$target")/$link ;;
+    esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
+
+MODE=install
+TARGET_DIR=""
+PROG=setup
+
+say()  { printf '%s\n' "$*"; }
+step() { printf '  %s\n' "$*"; }
+ok()   { printf '  ok    %s\n' "$*"; }
+# Everything from here down is part of a diagnostic: the problem line, the reason
+# it matters, and the command that fixes it. All of it goes to stderr, so the
+# whole explanation survives `2>/dev/null` and stays attached to the failure in a
+# pipeline. Only progress and success go to stdout.
+bad()  { printf '  PROBLEM  %s\n' "$*" >&2; }
+info() { printf '  ..    %s\n' "$*"; }
+# Explanation attached to a failure: stderr, because it is only ever read when
+# something has already gone wrong.
+why()  { printf '%s\n' "$*" >&2; }
+debug() { [ "${SETUP_DEBUG:-0}" = 1 ] && printf '  debug    %s\n' "$*" >&2; return 0; }
+
+FAILURES=0
+note_failure() { FAILURES=$((FAILURES + 1)); }
+
+# --------------------------------------------------------------- what we link
+# name -> the file in the checkout that should answer to it. The first is the
+# tool itself; tdthememaker is a wrapper because the package directory inside
+# the repo already owns that name.
+link_name() {
+    case $1 in
+        tdtheme)         printf 'tdtheme\n' ;;
+        tdthememaker)    printf 'tdthememaker-cli\n' ;;
+        check-td-writes) printf 'check-td-writes\n' ;;
+    esac
+}
+COMMANDS="tdtheme tdthememaker check-td-writes"
+
+# ------------------------------------------------------------ preflight: us
+if [ ! -f "$HERE/cli.py" ]; then
+    bad "no cli.py next to $PROG (looked in $HERE)"
+    why ""
+    why "  This looks like $PROG was copied out of the checkout, or the link to"
+    why "  it was followed into a different directory. Run it from inside the"
+    why "  repository, where cli.py, tdtheme and themes/ all sit together."
+    exit 2
+fi
+debug "checkout resolved to $HERE"
+
+# ------------------------------------------------- preflight: an interpreter
+# Checked before anything is created, because "linked three commands onto PATH"
+# is a bad thing to have done to someone who then cannot run any of them.
+#
+# This is the same preference order the wrappers use: PATH's python3 if it runs,
+# otherwise TouchDesigner's bundled one. A python3 that exists but cannot run -
+# the Command Line Tools stub, on a Mac with no CLT - counts as absent.
+find_python() {
+    if command -v python3 >/dev/null 2>&1 && python3 -c '' >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    debug "python3 on PATH: $(command -v python3 2>/dev/null || echo none)"
+    for candidate in \
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+    do
+        if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PYTHON=$(find_python) || PYTHON=""
+if [ -z "$PYTHON" ]; then
+    bad "no working python3, so nothing installed here would run"
+    why ""
+    why "  TouchDesigner ships a full Python 3.11 and the wrappers fall back to"
+    why "  it automatically - but that was not found either, which usually means"
+    why "  TouchDesigner is not in /Applications."
+    why ""
+    why "  Fix it with either of:"
+    why "    xcode-select --install        # installs a real python3"
+    why "    move TouchDesigner to /Applications"
+    exit 2
+fi
+debug "interpreter: $PYTHON ($($PYTHON -V 2>&1))"
+
+# ------------------------------------------------- preflight: TouchDesigner
+TD_APP=/Applications/TouchDesigner.app
+if [ ! -d "$TD_APP" ]; then
+    info "TouchDesigner not found at $TD_APP"
+    info "the links will be created, but apply will have nowhere to write"
+else
+    debug "TouchDesigner: present"
+fi
+
+# --------------------------------------------- preflight: the exec bit, again
+# The single most common reason an installed `tdtheme` answers "permission
+# denied": the link is fine and the file behind it is mode 644. Git records the
+# exec bit, so a clone preserves it - but a copy through exFAT, a cloud sync or
+# a zip does not. We fix it rather than report it, because it is our own file
+# and the fix is unambiguous.
+for cmd in $COMMANDS; do
+    source_file="$HERE/$(link_name "$cmd")"
+    if [ ! -f "$source_file" ]; then
+        bad "missing $source_file"
+        note_failure
+    elif [ ! -x "$source_file" ]; then
+        info "restoring the executable bit on $(link_name "$cmd")"
+        chmod +x "$source_file" 2>/dev/null
+        if [ -x "$source_file" ]; then
+            ok "$(link_name "$cmd") is executable"
+        else
+            bad "could not make $(link_name "$cmd") executable - check ownership"
+            note_failure
+        fi
+    else
+        debug "$(link_name "$cmd") already executable"
+    fi
+done
+
+# ------------------------------------------------------------ choosing a dir
+# Order matters. Homebrew's own bin comes first because if you have Homebrew,
+# that is where a command belongs and it is already on PATH. Then the two
+# standard locations, then ~/.local/bin, which always belongs to you.
+#
+# A directory that is on PATH but not writable is skipped, not fatal: on many
+# Macs /usr/local/bin is on PATH and owned by root, and asking for sudo to fix a
+# problem that ~/.local/bin solves for free is the wrong trade.
+on_path() {
+    case ":${PATH}:" in
+        *":$1:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+choose_dir() {
+    for dir in "${HOMEBREW_BIN:-}" /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+        [ -n "$dir" ] || continue
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            if on_path "$dir"; then
+                printf '%s\n' "$dir"
+                debug "chose $dir: writable and on PATH"
+            else
+                printf '%s\n' "$dir"
+                debug "chose $dir: writable, though not on PATH (add it to your shell rc)"
+            fi
+            # Both branches return here. Without this the loop kept walking and
+            # the function ended on its own `return 1`, so a writable directory
+            # that *was* on PATH reported as no writable directory at all.
+            return 0
+        else
+            debug "skipping $dir: $([ -d "$dir" ] && echo 'not writable' || echo 'absent')"
+        fi
+    done
+    return 1
+}
+
+# ------------------------------------------------------- inspecting a path
+# The other half of the "permission denied" mystery, and the sneakier one.
+# `ln -s target dir/name` does not fail when dir/name is already a directory -
+# it creates dir/name/name. PATH then finds a directory, and exec'ing a
+# directory is EACCES, so zsh reports "permission denied" and the ln looked
+# like it had worked.
+#
+# So: never hand ln a path that already exists, and say plainly what is there.
+existing_kind() {
+    # echoes one of: absent, symlink, directory, file
+    if [ -L "$1" ]; then printf 'symlink\n'
+    elif [ -d "$1" ]; then printf 'directory\n'
+    elif [ -e "$1" ]; then printf 'file\n'
+    else printf 'absent\n'
+    fi
+}
+
+# ------------------------------------------------------------------ install
+install_one() {
+    cmd=$1
+    bin_dir=$2
+    source_file="$HERE/$(link_name "$cmd")"
+    link_path="$bin_dir/$cmd"
+
+    kind=$(existing_kind "$link_path")
+    debug "$link_path: $kind"
+
+    case $kind in
+        absent) ;;
+        symlink)
+            current=$(readlink "$link_path")
+            # A link to a directory we have gone from, or to a different
+            # checkout, is worse than no link: it is a command that fails in a
+            # way that looks like a bug in the tool.
+            if [ "$current" = "$source_file" ]; then
+                ok "$cmd already linked to this checkout"
+                return 0
+            fi
+            if [ ! -e "$link_path" ]; then
+                info "$cmd is a broken link to $current - replacing it"
+            else
+                info "$cmd currently links to $current - replacing it"
+            fi
+            rm -f "$link_path" || { bad "could not remove the old $cmd link"; note_failure; return 1; }
+            ;;
+        directory|file)
+            # Unreachable in install mode: the preflight pass above refuses
+            # these before anything is created. Kept so that install_one still
+            # refuses rather than clobbering if it is ever called on its own,
+            # and so the reason lives in exactly one place for the reader.
+            bad "$link_path is a $kind, and this tool did not put it there"
+            note_failure
+            return 1
+            ;;
+    esac
+
+    ln -s "$source_file" "$link_path" 2>/dev/null
+    if [ ! -L "$link_path" ]; then
+        bad "could not create $link_path"
+        note_failure
+        why ""
+        if [ -w "$bin_dir" ]; then
+            why "    $bin_dir looks writable, so this is unexpected. Try removing"
+            why "    any existing $link_path by hand and re-running."
+        else
+            why "    $bin_dir is not writable by you. Either re-run with sudo,"
+            why "      sudo ./setup"
+            why "    or choose a directory you own:"
+            why "      ./setup \$HOME/.local/bin"
+            why "    (and add it to your PATH if it is not already there)"
+        fi
+        return 1
+    fi
+    ok "$cmd -> $source_file"
+    return 0
+}
+
+# ----------------------------------------------------------------- uninstall
+uninstall_one() {
+    cmd=$1
+    bin_dir=$2
+    link_path="$bin_dir/$cmd"
+    if [ "$(existing_kind "$link_path")" != symlink ]; then
+        info "$link_path is not a symlink; leaving it alone"
+        return 0
+    fi
+    if [ "$(readlink "$link_path")" != "$HERE/$(link_name "$cmd")" ]; then
+        info "$link_path points elsewhere; leaving it alone"
+        return 0
+    fi
+    rm -f "$link_path" && ok "removed $link_path" || bad "could not remove $link_path"
+}
+
+# ---------------------------------------------------------------------- main
+while [ $# -gt 0 ]; do
+    case $1 in
+        --check)     MODE=check ;;
+        --uninstall) MODE=uninstall ;;
+# -- help text ends here --
+        -h|--help)   sed -n '2,/^# -- help text ends here --$/p' "$0" \
+                     | sed '1d;$d;s/^# \{0,1\}//'; exit 0 ;;
+        -*)          say "unknown option: $1"; exit 2 ;;
+        *)           TARGET_DIR=$1 ;;
+    esac
+    shift
+done
+
+say "tdtheme setup"
+say "checkout    $HERE"
+
+if [ -z "$TARGET_DIR" ]; then
+    TARGET_DIR=$(choose_dir) || TARGET_DIR=""
+    if [ -z "$TARGET_DIR" ]; then
+        bad "found no writable directory for the links"
+    why ""
+    why "  Looked at, in order:"
+    why "    \${HOMEBREW_BIN:-}   (unset here)"
+    why "    /opt/homebrew/bin  $([ -d /opt/homebrew/bin ] && echo '(exists)' || echo '(absent)')"
+    why "    /usr/local/bin     $([ -d /usr/local/bin ] && echo "(exists, writable: $([ -w /usr/local/bin ] && echo yes || echo no))" || echo '(absent)')"
+    why "    \$HOME/.local/bin  $([ -d "$HOME/.local/bin" ] && echo '(exists)' || echo '(absent)')"
+    why ""
+    why "  Make one and re-run, or pick the directory yourself:"
+    why "    ./setup \$HOME/.local/bin"
+    exit 2
+    fi
+fi
+say "bin dir     $TARGET_DIR"
+say ""
+
+case $MODE in
+    uninstall)
+        for cmd in $COMMANDS; do uninstall_one "$cmd" "$TARGET_DIR"; done
+        say ""
+        [ "$FAILURES" -eq 0 ] && say "Links removed." || say "$FAILURES problem(s) above."
+        exit "$([ "$FAILURES" -eq 0 ] && echo 0 || echo 1)"
+        ;;
+    check)
+        for cmd in $COMMANDS; do
+            link_path="$TARGET_DIR/$cmd"
+            case $(existing_kind "$link_path") in
+                symlink) step "$link_path -> $(readlink "$link_path")" ;;
+                absent)  step "$link_path: would be created" ;;
+                *)       step "$link_path: $(existing_kind "$link_path") - would need removing first" ;;
+            esac
+        done
+        say ""
+        say "Nothing changed. Re-run without --check to do it."
+        exit 0
+        ;;
+esac
+
+if [ "$MODE" = install ]; then
+    # Preflight the whole set before creating anything.
+    #
+    # A single blocking collision - a directory, a file, anything this tool did
+    # not put there - is worth stopping for, and stopping for it *before* the
+    # first ln is what makes the closing summary honest. Installing two of three
+    # and then reporting a problem is the half-done state: the user is left
+    # wondering which of the two new links they should keep, and re-running does
+    # not obviously fix it.
+    #
+    # A stale symlink is not blocking, because replacing it is a normal part of
+    # installing and ./setup --uninstall can undo it.
+    for cmd in $COMMANDS; do
+        link_path="$TARGET_DIR/$cmd"
+        case $(existing_kind "$link_path") in
+            absent|symlink) ;;
+            directory|file)
+                bad "$link_path is a $(existing_kind "$link_path"), and this tool did not put it there"
+                note_failure
+                if [ "$(existing_kind "$link_path")" = directory ]; then
+                    why "    A directory here is the cause of the 'permission denied'"
+                    why "    that makes an installed tdtheme look fine but not run:"
+                    why "    PATH finds the directory, and executing one is EACCES."
+                    if [ -z "$(ls -A "$link_path" 2>/dev/null)" ]; then
+                        why ""
+                        why "    It is empty, so removing it is safe:"
+                    else
+                        why ""
+                        why "    It is NOT empty, so it has not been touched. Move it"
+                        why "    aside yourself if you are sure, then re-run."
+                    fi
+                    why ""
+                    why "      rm -rf $link_path && ./setup"
+                else
+                    why ""
+                    why "    Move it aside if you are sure, then re-run: ./setup"
+                fi
+                ;;
+        esac
+    done
+    if [ "$FAILURES" -gt 0 ]; then
+        why ""
+        why "Nothing has been created. The links that would have been fine are"
+        why "still waiting, and no half-made install was left behind."
+        exit 1
+    fi
+    for cmd in $COMMANDS; do install_one "$cmd" "$TARGET_DIR"; done
+fi
+
+# ------------------------------------------------------------- verification
+# The only test that counts: the installed name, from a different directory,
+# with the symlink followed. Every earlier check in this script can pass while
+# the thing is still broken.
+#
+# The verification PATH is the target directory *alone*. Leaving the inherited
+# PATH on the end would let an unrelated `tdtheme` further down it answer
+# instead - and that is not a hypothetical, it is how this check passed the first
+# time it ran, against a directory sitting exactly where the link should be.
+say ""
+say "Verifying"
+VERIFY_DIR=$(mktemp -d 2>/dev/null || echo /tmp/tdtheme-setup.$$)
+mkdir -p "$VERIFY_DIR" 2>/dev/null
+
+# Is what is in the bin dir actually pointing at this checkout?
+for cmd in $COMMANDS; do
+    link_path="$TARGET_DIR/$cmd"
+    if [ "$(existing_kind "$link_path")" != symlink ]; then
+        debug "verify: $link_path is not a symlink, skipping"
+        continue
+    fi
+    if [ "$(readlink "$link_path")" != "$HERE/$(link_name "$cmd")" ]; then
+        bad "$link_path does not point at this checkout"
+        note_failure
+    fi
+done
+
+# Run it by absolute path rather than by name. That tests the link itself and
+# cannot be answered by some other tdtheme that happens to be installed.
+if (cd "$VERIFY_DIR" && "$TARGET_DIR/tdtheme" --help) >/dev/null 2>&1; then
+    ok "tdtheme --help runs through the link, from an unrelated directory"
+else
+    bad "tdtheme does not run through the link at $TARGET_DIR/tdtheme"
+    note_failure
+    why ""
+    why "    The usual cause is the executable bit on the file behind it:"
+    why "      ls -l $HERE/tdtheme"
+    why "      chmod +x $HERE/tdtheme"
+    why ""
+    why "    If the link is a directory rather than a symlink, that is the other"
+    why "    way to get 'permission denied', and it means something else already"
+    why "    owns the name:  ls -ld $TARGET_DIR/tdtheme"
+fi
+
+# Only then the PATH question, which is a separate concern from the link being
+# correct and is the one that varies by shell. Not being on PATH is *not* a
+# failure: the links are right, and `./setup ~/.local/bin` on a fresh machine
+# lands here having done its whole job. It only means one more line is needed
+# before the bare name works, so it is advice rather than a problem - counting it
+# would make a correct install report a non-zero exit and a scary summary.
+if (cd "$VERIFY_DIR" && PATH="$TARGET_DIR" command -v tdtheme) >/dev/null 2>&1; then
+    ok "found on a PATH of just $TARGET_DIR"
+else
+    info "note: $TARGET_DIR is not on your PATH, so the bare name does not"
+    info "      work yet even though the links themselves are correct."
+fi
+if ! on_path "$TARGET_DIR"; then
+    say ""
+    say "    export PATH=\"$TARGET_DIR:\$PATH\""
+    say ""
+    say "  Add that to your ~/.zshrc, then open a new terminal."
+    say ""
+fi
+rm -rf "$VERIFY_DIR" 2>/dev/null
+
+say ""
+if [ "$FAILURES" -eq 0 ]; then
+    say "Done. From any directory:"
+    say ""
+    say "    tdtheme status          # check the install"
+    say "    tdtheme list            # see the themes"
+    say "    tdtheme apply midnight  # try one"
+    say ""
+    say "Undo with: ./setup --uninstall"
+    exit 0
+fi
+
+why "$FAILURES problem(s) above. Nothing was left half-done:"
+why "  re-run with SETUP_DEBUG=1 for a trace of every probe,"
+why "  or ./setup --check to see the current state without changing it."
+exit 1
