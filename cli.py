@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import tdicons
 import tdtheme as T
@@ -277,6 +280,183 @@ def cmd_reset(args) -> int:
     return cmd_apply(args)
 
 
+def _git(args, cwd):
+    """Run git, returning (returncode, stdout, stderr). Never raises."""
+    try:
+        done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                              text=True)
+    except OSError as exc:
+        return 127, "", str(exc)
+    return done.returncode, done.stdout.strip(), done.stderr.strip()
+
+
+def _installed_links():
+    """The symlinks on PATH that point into this checkout.
+
+    Found by reading PATH rather than by trusting a recorded list, so it
+    reports what is actually there now. A stale record would remove links that
+    are already gone and miss ones made by hand.
+    """
+    here = str(T.root)
+    found = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        for name in ("tdtheme", "tdthememaker", "check-td-writes"):
+            path = Path(entry) / name
+            try:
+                if not path.is_symlink():
+                    continue
+                target = os.readlink(str(path))
+            except OSError:
+                continue
+            resolved = target if os.path.isabs(target) else str(Path(entry) / target)
+            try:
+                if os.path.realpath(resolved).startswith(here + os.sep):
+                    found.append(path)
+            except OSError:
+                continue
+    return found
+
+
+def cmd_uninstall(args) -> int:
+    """Put TouchDesigner back to stock and remove the commands from PATH.
+
+    The install is restored first, because that is the only part of this that
+    is not reversible by re-running the tool. Once the links are gone the
+    user has no way to undo a theme but by hand-editing four undocumented
+    files, so the order is load-bearing and not a preference.
+
+    The checkout itself is never deleted. It holds the themes, and a user
+    maintaining their own would lose them to a command whose name reads like
+    "remove this program". The directory is printed with the command to remove
+    it, so the decision stays with whoever wrote the theme.
+    """
+    # 1. Restore stock. This is the irreversible part, so it comes first while
+    #    the code that does it is still here to run.
+    print("Restoring the stock TouchDesigner UI...")
+    if args.keep_files:
+        print("  --keep-files, so the install is left as it is")
+    else:
+        args.name = "default"
+        args.force = False
+        args.no_icons = False
+        args.backup = False
+        args.allow_unknown = True   # a reset is the one case where the refusal
+                                    # would strand the user: they are trying to
+                                    # leave, not to install
+        code = cmd_apply(args)
+        if code != EXIT_OK:
+            print("\nuninstall: the install was not restored, so the links are "
+                  "being left alone. Fix the error above and re-run.", file=sys.stderr)
+            return code
+
+    # 2. Remove the links. Only ones that point at *this* checkout - a link to
+    #    somewhere else is not this tool's to delete.
+    links = _installed_links()
+    if not links:
+        print("\nNo links to this checkout on PATH.")
+    for path in links:
+        try:
+            path.unlink()
+            print(f"  removed {path}")
+        except OSError as exc:
+            bad = f"could not remove {path}: {exc}"
+            print(f"  PROBLEM  {bad}", file=sys.stderr)
+
+    # 3. The state file, so a re-clone does not inherit a phantom theme.
+    applied = T._applied_path()
+    if applied.exists():
+        try:
+            applied.unlink()
+            print(f"  removed {applied.name}")
+        except OSError as exc:
+            print(f"  PROBLEM  could not remove {applied.name}: {exc}", file=sys.stderr)
+
+    print(f"\nDone. TouchDesigner is back to stock. The checkout is still here:\n"
+          f"  {T.root}\n"
+          f"It holds your themes, so it is not deleted. To remove it and this "
+          f"machine's\nprivate baseline as well:\n"
+          f"  rm -rf {T.root}")
+    return EXIT_OK
+
+
+def cmd_update(args) -> int:
+    """`git pull` the checkout, refusing when the working tree is not clean.
+
+    A fast-forward only, deliberately. This checkout holds themes that may be
+    hand-edited, and a merge commit on someone's behalf is a merge conflict
+    they then have to resolve with no memory of what they wanted. `--ff-only`
+    means this either updates cleanly or stops and says why.
+
+    The dirty check is a refusal, not a warning, for the same reason `apply`
+    refuses unknown keys: a pull that overwrites a local edit destroys work
+    that git never saw, because the whole point is that it was uncommitted.
+    """
+    if not (T.root / ".git").exists():
+        print(f"error: {T.root} is not a git checkout, so there is nothing to "
+              f"update.\n  Re-clone it instead:\n"
+              f"  git clone https://github.com/jj-disaster/tdtheme.git",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    code, _, err = _git(["rev-parse", "--is-inside-work-tree"], T.root)
+    if code != 0:
+        print(f"error: {T.root} is not a git checkout ({err})", file=sys.stderr)
+        return EXIT_ERROR
+
+    before, out, err = _git(["rev-parse", "--short", "HEAD"], T.root)
+    if before:
+        before = out
+
+    status, out, _ = _git(["status", "--porcelain"], T.root)
+    dirty = [l for l in out.splitlines() if l.strip()]
+    if dirty:
+        print("Refusing: this checkout has uncommitted changes, and a pull can "
+              "overwrite them.\n",
+              file=sys.stderr)
+        for line in dirty[:10]:
+            print(f"  {line}", file=sys.stderr)
+        if len(dirty) > 10:
+            print(f"  ... and {len(dirty) - 10} more", file=sys.stderr)
+        print("\nCommit them, stash them, or look at them first:\n"
+              "  git status          what is changed\n"
+              "  git diff            what the changes are\n"
+              "  git stash           set them aside, then re-run this",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    code, out, err = _git(["pull", "--ff-only"], T.root)
+    if code != 0:
+        print(f"error: git pull failed\n{err}", file=sys.stderr)
+        if "diverging" in err or "divergent" in err:
+            print("\n  Your branch and the remote have both moved on, so there "
+                  "is no\n  fast-forward. This is deliberately not resolved for "
+                  "you:\n    git log --oneline --left-right HEAD...origin/main"
+                  "\n  shows both sides. Then either:\n"
+                  "    git merge origin/main    and resolve, or\n"
+                  "    git rebase origin/main   to replay your commits on top",
+                  file=sys.stderr)
+        return EXIT_ERROR
+
+    after, _, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
+    if before and after and before != after:
+        print(f"Updated {before} -> {after}")
+        # The install is merge(baseline, theme), so a pull that changes either
+        # one means the files on disk no longer match what this checkout
+        # describes. Naming the re-apply is the whole point of reporting it.
+        print("\n  A new upstream theme is a new theme: it is not installed "
+              "until you\n  apply it. Your currently applied theme is unchanged "
+              "on disk.")
+    else:
+        print("Already up to date.")
+
+    print("\n  If you changed themes, re-apply to pick up changes to it:\n"
+          "    tdtheme reset        back to stock\n"
+          "    tdtheme apply NAME   a specific theme")
+    return EXIT_OK
+
+
 def cmd_status(args) -> int:
     state = T.status()
     print(f"TouchDesigner     {state.td_version or 'not found'}")
@@ -498,6 +678,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write even though the install holds keys this baseline "
                         "has never seen, which drops them")
     p.set_defaults(func=cmd_reset)
+
+    p = sub.add_parser("uninstall",
+                       help="restore the stock UI and remove the commands from PATH; "
+                            "the checkout itself is kept")
+    p.add_argument("--keep-files", action="store_true",
+                   help="remove the commands but leave TouchDesigner's files "
+                        "themed as they are now")
+    p.set_defaults(func=cmd_uninstall)
+
+    p = sub.add_parser("update",
+                       help="pull changes to this checkout from its git remote")
+    p.set_defaults(func=cmd_update)
 
     icons = sub.add_parser("icons", help="inspect icon sets")
     icons_sub = icons.add_subparsers(dest="icons_command", required=True)
