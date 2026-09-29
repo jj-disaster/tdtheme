@@ -37,16 +37,19 @@ import tdicons
 
 __all__ = [
     "ThemeError", "FileFormatError", "ThemeNotFound", "ValidationError",
+    "UnknownKeysError",
     "TdFile", "Finding", "Status", "IconFinding",
     "parse", "serialize", "load_file", "read_bytes", "write_file",
     "merge", "validate", "diff", "store_changes",
     "load_overlay",
-    "root", "baseline_dir", "themes_dir", "backups_dir", "config_dir",
+    "root", "baseline_dir", "baseline_shipped_dir", "baseline_shadow_dir",
+    "baseline_is_shadowed",
+    "themes_dir", "backups_dir", "config_dir",
     "icons_dir", "baseline_icons_dir", "theme_icons_dir",
     "ui_tox_path", "baseline_ui_tox", "theme_ui_tox", "ui_tox_source",
     "td_version", "td_running",
     "list_themes", "require_theme", "theme_path",
-    "capture", "apply", "status", "plan",
+    "capture", "apply", "status", "plan", "install_only_keys",
     "icons_available", "icon_diff", "validate_icons",
     "preview_icons",
 ]
@@ -72,6 +75,30 @@ class ValidationError(ThemeError):
     def __init__(self, message: str, findings: "list[Finding]"):
         super().__init__(message)
         self.findings = findings
+
+
+class UnknownKeysError(ThemeError):
+    """The install holds keys no baseline knows, and applying would drop them.
+
+    Carries the per-store mapping so the caller can name the stores and counts
+    rather than only relaying a sentence. This is a refusal, not a warning, and
+    the distinction is the whole point: a warning that arrives on the same run as
+    the loss tells the user to do something about a problem that the command has
+    already made irreversible. By the time a second `apply` runs there is
+    nothing left to report.
+    """
+
+    def __init__(self, orphans: "dict[str, list[str]]", fix: str = ""):
+        total = sum(len(k) for k in orphans.values())
+        stores = ", ".join(f"{s} ({len(k)})" for s, k in sorted(orphans.items()))
+        message = (
+            f"the install holds {total} key(s) this baseline has never seen, in "
+            f"{stores}; applying would drop them and nothing can put them back"
+        )
+        if fix:
+            message += f". {fix}"
+        super().__init__(message)
+        self.orphans = orphans
 
 
 # Paths --------------------------------------------------------------------
@@ -112,9 +139,23 @@ UI_TOX = "ui.tox"
 DEFAULT_THEME = "default"
 
 root = Path(__file__).resolve().parent
-baseline_dir = root / "baseline"
 themes_dir = root / "themes"
 backups_dir = root / "backups"
+
+#: The baseline every theme is merged over. Resolved once, at import, from
+#: `baseline.local/` when it exists and `baseline/` otherwise - so a beta tester
+#: on a different TouchDesigner build can `capture` into a private baseline and
+#: never touch the committed one. The shadow is gitignored and the resolution
+#: is deliberately at import rather than per-call, so a process does not change
+#: its baseline halfway through; tests override `baseline_dir` outright.
+baseline_shipped_dir = root / "baseline"
+baseline_shadow_dir = root / "baseline.local"
+baseline_dir = baseline_shadow_dir if baseline_shadow_dir.is_dir() else baseline_shipped_dir
+
+
+def baseline_is_shadowed() -> bool:
+    """True when a private `baseline.local/` is shadowing the committed one."""
+    return baseline_dir == baseline_shadow_dir
 
 
 def config_dir() -> Path:
@@ -595,9 +636,15 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
     known = set(baseline.data)
     for key in target.data:
         if key and key not in known:
+            # Deliberately neutral about the cause. A key missing from the
+            # baseline is a typo, or a key the installed TouchDesigner added and
+            # this baseline predates - and `apply` refuses on the second kind
+            # rather than dropping it, so the finding fires on exactly the build
+            # the tool is working correctly for. "typo" alone would read as a
+            # mistake to a tester who did nothing wrong.
             findings.append(Finding(
                 "warning", key,
-                "not present in baseline - typo, or added by a newer TouchDesigner"
+                "not in baseline - typo, or newer TouchDesigner"
             ))
 
     # Unresolved: when a theme sets both X and default.X we do not know
@@ -697,31 +744,61 @@ def baseline_version() -> "dict":
         return {}
 
 
-def capture(*, force: bool = False) -> "dict[str, Path]":
-    """Snapshot the installed stores as the baseline. Refuses to clobber."""
+def capture(*, force: bool = False, into_shadow: bool = False) -> "dict[str, Path]":
+    """Snapshot the installed stores as the baseline. Refuses to clobber.
+
+    `into_shadow` writes to `baseline.local/` instead of the committed
+    `baseline/`, creating it if needed. It is how a tester on a different
+    TouchDesigner build re-baselines without touching a tracked file: the
+    shadow is gitignored, and `baseline_dir` prefers it once it exists, so every
+    later command merges over their own build rather than the shipped one.
+
+    Writes to the committed baseline by default, deliberately. `baseline/` is
+    shared and tracked, so a re-capture from a build nobody else runs is a
+    change every other user inherits; keeping the private copy opt-in means the
+    safe thing is the default and the shared thing is the deliberate choice.
+    """
+    target_dir = baseline_shadow_dir if into_shadow else baseline_dir
     paths = _baseline_paths()
     existing = [n for n, p in paths.items() if p.exists()]
     # The icon set is part of the baseline too, so the guard names it. Otherwise
     # the refusal reads "baseline already exists (TouchColors, TouchOptions)" and
     # implies the 97 icons are not at stake, when re-capturing replaces all of them
     # and every theme's `icons diff` is computed against the result. `ui.tox` is in
-    # the same position.
-    icons_present = baseline_icons_dir().is_dir()
-    ui_tox_present = baseline_ui_tox().is_file()
-    if (existing or icons_present or ui_tox_present) and not force:
-        held = list(existing)
-        if icons_present:
-            held.append(ICONS_DIRNAME)
-        if ui_tox_present:
-            held.append(f"{SYSTEM_DIRNAME}/{UI_TOX}")
-        raise ThemeError(
-            f"baseline already exists ({', '.join(held)}). Re-capturing changes "
-            f"what every existing theme diffs against. Use --force if that is intended."
-        )
+    # the same position. Only the destination the call will actually write is
+    # checked: a shadow is empty while the committed baseline is full, and
+    # refusing the first capture into a new shadow would make the flag useless.
+    if not into_shadow:
+        icons_present = baseline_icons_dir().is_dir()
+        ui_tox_present = baseline_ui_tox().is_file()
+        if (existing or icons_present or ui_tox_present) and not force:
+            held = list(existing)
+            if icons_present:
+                held.append(ICONS_DIRNAME)
+            if ui_tox_present:
+                held.append(f"{SYSTEM_DIRNAME}/{UI_TOX}")
+            raise ThemeError(
+                f"baseline already exists ({', '.join(held)}). Re-capturing changes "
+                f"what every existing theme diffs against. Use --force if that is intended, "
+                f"or --local to capture into {baseline_shadow_dir.name}/ and leave this one alone."
+            )
+    else:
+        icons_present = (target_dir / ICONS_DIRNAME).is_dir()
+        ui_tox_present = (target_dir / SYSTEM_DIRNAME / UI_TOX).is_file()
+        held = [n for n, p in paths.items() if (target_dir / n).exists()]
+        if (held or icons_present or ui_tox_present) and not force:
+            if icons_present:
+                held.append(ICONS_DIRNAME)
+            if ui_tox_present:
+                held.append(f"{SYSTEM_DIRNAME}/{UI_TOX}")
+            raise ThemeError(
+                f"{target_dir.name}/ already exists ({', '.join(held)}). "
+                f"Use --force to replace it."
+            )
 
     cfg = config_dir()
     written: "dict[str, Path]" = {}
-    baseline_dir.mkdir(parents=True, exist_ok=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
     for name in STORE_FILES:
         source = cfg / name
         raw = read_bytes(source)
@@ -729,7 +806,7 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
         parsed = TdFile.parse(raw, name)
         if parsed.to_bytes() != raw:
             raise FileFormatError(f"{source} does not round-trip; refusing to baseline")
-        destination = baseline_dir / name
+        destination = target_dir / name
         write_file(destination, raw)
         written[name] = destination
 
@@ -739,7 +816,7 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     # since it needs the baseline directory this line is about to create, so the
     # very first capture would silently skip icons and no later one would fix it.
     if icons_dir().is_dir():
-        written.update(tdicons.capture_icons(icons_dir(), baseline_icons_dir()))
+        written.update(tdicons.capture_icons(icons_dir(), target_dir / ICONS_DIRNAME))
 
     # Verbatim, like the icons: the point is to be the file TouchDesigner shipped,
     # so a hand-edited ui.tox in the install is captured as-is and stays
@@ -748,14 +825,15 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     # a reference rather than something to install. It exists so `capture` does not
     # quietly lose the file and a reinstall can be compared against it.
     if ui_tox_path().is_file():
-        baseline_ui_tox().parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ui_tox_path(), baseline_ui_tox())
-        written[UI_TOX] = baseline_ui_tox()
+        destination_tox = target_dir / SYSTEM_DIRNAME / UI_TOX
+        destination_tox.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ui_tox_path(), destination_tox)
+        written[UI_TOX] = destination_tox
 
-    write_file(_version_path(), json.dumps({
+    write_file(target_dir / "version.json", json.dumps({
         "td_build": td_version(),
         "captured": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "icons": len(tdicons.icon_names(baseline_icons_dir())),
+        "icons": len(tdicons.icon_names(target_dir / ICONS_DIRNAME)),
     }, indent=2).encode() + b"\n")
     return written
 
@@ -1025,8 +1103,88 @@ def store_changes(before: "TdFile", after: "TdFile") -> "dict":
     return {"changed": changed, "removed": removed}
 
 
+def install_only_keys(baseline: "dict[str, TdFile]") -> "dict[str, list[str]]":
+    """Keys the live install holds that the baseline has never seen.
+
+    The dangerous direction, and the reason this exists. `apply` writes the merge
+    of the baseline and the theme overlay, so a key that is only in the install is
+    in neither input and is dropped by every apply - silently, exit 0, with
+    nothing in the output but a count that reads as a fact about the theme. The
+    install is then quietly rolled back towards a build it is no longer running.
+
+    The fix is *not* to carry such keys through, because a key added that way is
+    indistinguishable from a key a *theme* overlay added, and carrying those
+    through too would make themes permanently additive and break the
+    total-overwrite property that `reset` and every theme switch depend on. The
+    fix is to re-baseline: `capture --local` snapshots the running build into a
+    gitignored `baseline.local/`, and from then on the key is an ordinary baseline
+    key that `reset` handles correctly.
+
+    So this reports rather than repairs. It is a count per store, not a list,
+    because a new build can add dozens of keys and a per-key list would bury the
+    one line that matters.
+
+    A key the *last applied theme* introduced is not reported, and that
+    discrimination is what makes the caller's refusal safe to act on. Such a key
+    is in the install because this tool put it there, so dropping it is the
+    settled total-overwrite behaviour rather than loss, and a user with a custom
+    theme that adds a key must still be able to switch themes. `.applied.json`
+    names that theme, and the ambiguity that forced the report-only design above
+    is resolvable after all - not by the key, but by who wrote it.
+    """
+    # Which theme last wrote the install, and therefore which keys it is
+    # responsible for. A missing or unreadable `.applied.json` is not fatal: the
+    # worst case is that a theme-added key looks like a build's, and the refusal
+    # then asks the user to re-baseline. That is the safe direction to err in.
+    theme_added: "set[str]" = set()
+    try:
+        state = json.loads(_applied_path().read_text())
+        last = state.get("theme")
+    except (OSError, ValueError, AttributeError):
+        last = None
+    if last:
+        for store in STORE_FILES:
+            overlay = themes_dir / last / f"{store}.yaml"
+            if not overlay.is_file():
+                continue
+            try:
+                theme_added |= set(load_overlay(overlay.read_text(), store))
+            except (OSError, ThemeError):
+                # An unreadable overlay means the keys it added are
+                # unattributable, which means they look like a build's. Same
+                # safe direction.
+                continue
+
+    found: "dict[str, list[str]]" = {}
+    for store in STORE_FILES:
+        installed = config_dir() / store
+        if not installed.exists():
+            continue
+        try:
+            live = load_file(installed, store)
+        except (ThemeError, FileFormatError):
+            # An unreadable install is not this finding's business, and guessing
+            # would be worse than staying quiet: `apply` is about to report a
+            # write failure of its own.
+            continue
+        known = baseline[store].data
+        extras = [key for key in live.data
+                  if key and key not in known and key not in theme_added]
+        if extras:
+            found[store] = sorted(extras)
+    return found
+
+
 def plan(name: str) -> "dict[str, TdFile]":
-    """Merge theme over baseline and validate, without touching the install."""
+    """Merge theme over baseline and validate, without touching the install.
+
+    The merge base is the baseline and nothing else. Widening it with the live
+    install's own keys would preserve a newer build's additions, but it cannot
+    tell those apart from keys a theme overlay added, and preserving the second
+    kind breaks the total overwrite that `reset` and theme switching rely on.
+    `install_only_keys` reports that case instead, and `capture --local` is the
+    resolution.
+    """
     baseline = load_baseline()
     overlays = _load_theme(name)
     merged, findings = {}, []
@@ -1037,7 +1195,7 @@ def plan(name: str) -> "dict[str, TdFile]":
 
 
 def apply(name: str, *, force: bool = False, icons: bool = True,
-          backup: bool = False) -> dict:
+          backup: bool = False, allow_unknown: bool = False) -> dict:
     """Merge, validate, and write. Refuses on validation errors.
 
     `backup` copies the outgoing stores and icons into `backups/<timestamp>/`
@@ -1046,9 +1204,17 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
     holds a theme's set completed from the baseline, so both inputs are in git
     and `apply <the previous theme>` reproduces the outgoing bytes exactly. What a
     backup adds is cover for the one input git lacks - a theme edited on disk and
-    not committed - and it is not free: a set runs 36 KB to 464 KB depending on
-    how much the outgoing theme had changed, and nothing ever pruned `backups/`.
+    not yet committed - and it is not free: a set runs 36 KB to 464 KB depending
+    on how much the outgoing theme had changed, and nothing ever pruned `backups/`.
     Hence a flag, and `result["backup"]` is `None` when it is off.
+
+    The merge base is the baseline and nothing else. A key that exists only in
+    the install is in neither input, so every apply drops it - on a TouchDesigner
+    build newer than the baseline that is data loss. `install_only_keys` measures
+    it and this refuses rather than writing, because the alternative is advice
+    that arrives on the same run as the loss. `capture --local` re-baselines so
+    the keys become ordinary baseline keys, and `allow_unknown` is the explicit
+    opt-out for a build whose extra keys really are junk.
     """
     result = plan(name)
     findings = result["findings"]
@@ -1071,6 +1237,36 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
         warnings.append(
             f"TouchDesigner is running (pid {', '.join(map(str, running))}). "
             f"Restart to see changes"
+        )
+
+    # The build mismatch, as context rather than a gate. It is a proxy: a build
+    # can change without touching these files, and they can differ without a
+    # build change. What actually matters is the key set, which
+    # `install_only_keys` measures directly and which the warning below reports
+    # in its own right. Never fatal on its own, because the expected case in the
+    # field is a tester on a build the shipped baseline predates, and refusing
+    # them on a version string would break the tool for exactly the people it is
+    # being sent to.
+    live_build = td_version()
+    baseline_build = baseline_version().get("td_build")
+    if baseline_build and live_build and baseline_build != live_build:
+        warnings.append(
+            f"TouchDesigner build {live_build}, baseline captured from "
+            f"{baseline_build}. Run `tdtheme capture --local` to re-baseline "
+            f"your own build."
+        )
+
+    # The measured version of the same thing, and the one that matters: these
+    # keys are about to be deleted, because they are in the install and in
+    # neither the baseline nor the overlay. Checked before the backup so a
+    # refusal never leaves a half-made set in `backups/`, and before every write
+    # so nothing is lost at all.
+    orphans = install_only_keys(load_baseline())
+    if orphans and not allow_unknown:
+        raise UnknownKeysError(
+            orphans,
+            "Run `tdtheme capture --local` to re-baseline your own build, or "
+            "pass --allow-unknown to drop them deliberately.",
         )
 
     changes = {}

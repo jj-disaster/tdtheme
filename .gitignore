@@ -10,6 +10,12 @@ testiconsforagents/
 # Backups are copies of a live TouchDesigner install, created on every apply
 backups/
 
+# A private baseline for a TouchDesigner build other than the one the committed
+# `baseline/` was captured from, written by `tdtheme capture --local`. Local to
+# one machine by definition - capturing it is the whole point - so it is never
+# committed. Delete it to go back to the shipped baseline.
+baseline.local/
+
 # macOS
 .DS_Store
 

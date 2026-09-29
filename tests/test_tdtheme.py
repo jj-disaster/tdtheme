@@ -87,6 +87,12 @@ os.environ["TDTHEME_CONFIG"] = str(install)
 # (notably .applied.json, which lives under root rather than baseline_dir).
 T.root = tmp
 T.baseline_dir = tmp / "baseline"
+# These two are resolved from `root` at import and are NOT derived from
+# `baseline_dir`, so patching only the one leaves them pointing at the real
+# project. `capture --local` writes through `baseline_shadow_dir`, so without
+# this it wrote a 2.2 MB shadow into the checkout this test runs in.
+T.baseline_shipped_dir = T.baseline_dir
+T.baseline_shadow_dir = tmp / "baseline.local"
 T.themes_dir = tmp / "themes"
 T.backups_dir = tmp / "backups"
 
@@ -1334,7 +1340,229 @@ check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
       f"`tdtheme` works as a bare command found on PATH "
       f"(exit {bare.returncode}: {bare.stderr.strip()[:70]})")
 
+# The interpreter. On a Mac without the Command Line Tools, `/usr/bin/python3` is
+# a 118 KB stub that opens a GUI installer rather than running anything, so "there
+# is a python3" and "python3 runs" are different questions. The wrapper falls back
+# to TouchDesigner's bundled interpreter, which is a dependency anyone using this
+# tool already has.
+#
+# The PATH built here holds the shell utilities the wrapper genuinely needs to
+# find itself - `dirname` and `readlink` - and deliberately no interpreter. An
+# entirely empty PATH would be a different test: it would fail on `dirname` before
+# ever reaching the interpreter choice, which is a property of `#!/bin/sh` rather
+# than of this fallback, and it would pass or fail for the wrong reason.
+no_python_bin = tmp / "bin-without-python"
+no_python_bin.mkdir(exist_ok=True)
+for utility in ("dirname", "readlink"):
+    real = shutil.which(utility)
+    if real:
+        (no_python_bin / utility).symlink_to(real)
+(links / "python3").unlink(missing_ok=True)  # in case a future check linked one
+no_python = subprocess.run(
+    [str(links / "tdtheme"), "list"], capture_output=True, text=True, cwd=away,
+    # PATH loses the interpreter but the rest of the environment stays: `list`
+    # still needs TDTHEME_CONFIG to know which install it is talking about, and
+    # that is not what this check is about.
+    env={**os.environ, "PATH": os.pathsep.join([str(links), str(no_python_bin)])})
+check(no_python.returncode == 0 and "defaultnowarn" in no_python.stdout,
+      f"and falls back to TouchDesigner's interpreter when PATH has no python3 "
+      f"(exit {no_python.returncode}: {no_python.stderr.strip()[:70]})")
+
+# A python3 that is on PATH but will not run - the CLT stub's shape. It must not
+# be exec'd into a failure that looks like a bug in the tool.
+stub_bin = tmp / "bin-with-broken-python"
+stub_bin.mkdir(exist_ok=True)
+for utility in ("dirname", "readlink"):
+    real = shutil.which(utility)
+    if real:
+        (stub_bin / utility).symlink_to(real)
+(stub_bin / "python3").write_text("#!/bin/sh\nexit 1\n")
+os.chmod(stub_bin / "python3", 0o755)
+not_runnable = subprocess.run(
+    [str(links / "tdtheme"), "list"], capture_output=True, text=True, cwd=away,
+    env={**os.environ, "PATH": os.pathsep.join([str(stub_bin), str(links)])})
+check(not_runnable.returncode != 0,
+      f"a python3 on PATH that cannot run is not silently trusted "
+      f"(exit {not_runnable.returncode})")
+
 # ---------------------------------------------------------------- cleanup
+
+# ------------------------------------------- a key the baseline has not seen
+#
+# The dangerous direction. `apply` writes merge(baseline, theme), so a key that
+# exists only in the install is in neither input and would be deleted by every
+# apply - silently, exit 0, with nothing in the output but a count that reads as
+# a fact about the theme. On a TouchDesigner build newer than the baseline that
+# is data loss, and the install is quietly rolled back towards a build it is no
+# longer running.
+#
+# Carrying such keys through would fix that and break something else: a key added
+# by a *theme* overlay is indistinguishable from a key added by a build, and
+# preserving both makes themes permanently additive. So the keys are not carried
+# through; `apply` refuses instead, and `capture --local` is the fix.
+#
+# Refusing rather than warning is the load-bearing part, and it was arrived at by
+# measuring the warning: it arrived on the same run as the loss, so by the time
+# the user could act on it the key was already gone and a second `apply` had
+# nothing left to report. These checks pin the refusal, the absence of any
+# write, and the fact that the advice still works afterwards.
+
+NEW_BUILD_KEY = "key.only.the.new.build"
+NEW_BUILD_VALUE = ["0.11", "0.22", "0.33"]
+
+shutil.copytree(PROJECT / "themes" / "midnight", T.themes_dir / "midnight")
+
+T.apply("default")
+colors_path = install / T.TOUCHCOLORS
+planted = T.load_file(colors_path, T.TOUCHCOLORS)
+planted.data[NEW_BUILD_KEY] = NEW_BUILD_VALUE
+colors_path.write_bytes(planted.to_bytes())
+check(NEW_BUILD_KEY in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "test setup: the install holds a key the baseline does not")
+check(NEW_BUILD_KEY not in T.load_baseline()[T.TOUCHCOLORS].data,
+      "test setup: and the baseline really does not")
+
+orphans = T.install_only_keys(T.load_baseline())
+check(orphans.get(T.TOUCHCOLORS) == [NEW_BUILD_KEY],
+      f"install_only_keys names the key the baseline has not seen ({orphans})")
+check(T.TOUCHOPTIONS not in orphans, "and only the store that actually has one")
+
+# It must stop the apply. A warning nobody reads is the same as the bug, and a
+# warning printed by the command doing the damage is worse - it reads as
+# actionable when the window to act has already closed.
+before_refusal = {f.name: f.read_bytes() for f in install.rglob("*") if f.is_file()}
+with contextlib.redirect_stdout(io.StringIO()) as orphan_output:
+    with contextlib.redirect_stderr(orphan_output):
+        orphan_code = tdtheme_cli.main(["apply", "midnight"])
+orphan_text = orphan_output.getvalue()
+check(orphan_code != 0, f"apply refuses rather than writing ({orphan_code})")
+check("never seen" in orphan_text and "TouchColors" in orphan_text,
+      f"and says which store holds the key ({orphan_text!r})")
+check("capture --local" in orphan_text,
+      "and names the command that fixes it, rather than just complaining")
+check("allow-unknown" in orphan_text,
+      "and offers the explicit opt-out, for a build whose extra keys are junk")
+
+# The property a warning could not have: nothing was written. Compared as bytes
+# over the whole install rather than by key name, so a partial write - a store
+# replaced and then a failure, or a backup set made and then abandoned - fails
+# here too.
+after_refusal = {f.name: f.read_bytes() for f in install.rglob("*") if f.is_file()}
+check(after_refusal == before_refusal,
+      "and wrote nothing at all, so the advice it gave is still available")
+check(NEW_BUILD_KEY in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "the key the baseline has not seen is still there - the data loss, avoided")
+check(T.install_only_keys(T.load_baseline()).get(T.TOUCHCOLORS) == [NEW_BUILD_KEY],
+      "and is therefore still reportable, unlike after a warning-and-proceed")
+
+# The opt-out is real, not decorative. Someone whose build genuinely added junk
+# must be able to say so explicitly, and the deletion is still total.
+with contextlib.redirect_stdout(io.StringIO()) as allowed_output:
+    with contextlib.redirect_stderr(io.StringIO()):
+        allowed_code = tdtheme_cli.main(["apply", "midnight", "--allow-unknown"])
+check(allowed_code == 0, f"--allow-unknown overrides ({allowed_code})")
+check("never seen" not in allowed_output.getvalue(),
+      "and then says nothing, because the user already knows")
+T.load_file(colors_path, T.TOUCHCOLORS)  # parses, so a corrupt file fails loudly
+check(NEW_BUILD_KEY not in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "and does drop the key - the total-overwrite property is unchanged")
+check("worksheet.bg" in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "while the keys the baseline does know are written normally")
+
+# The alternative to refusing. Total-overwrite is what `reset` and every theme
+# switch depend on, and the test below is the one that was written for it: a key
+# a *theme* adds must be droppable by the next theme. If a future change ever
+# preserves install-only keys, this is what catches it.
+addskey = T.themes_dir / "orphancheck"
+addskey.mkdir(parents=True, exist_ok=True)
+(addskey / f"{T.TOUCHCOLORS}.yaml").write_text(f'{NEW_BUILD_KEY}: ["9", "9", "9"]\n')
+(addskey / f"{T.TOUCHOPTIONS}.yaml").write_text("")
+T.apply("orphancheck", force=True, allow_unknown=True)
+check(T.load_file(colors_path, T.TOUCHCOLORS).data.get(NEW_BUILD_KEY) == ["9", "9", "9"],
+      "a theme can write a key the baseline has never seen")
+T.apply("default", allow_unknown=True)
+check(NEW_BUILD_KEY not in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "and the next theme drops it - themes do not accumulate")
+
+# The re-baseline route, which is what the refusal tells a tester to do. It has
+# to work, and it has to turn the key into an ordinary baseline key so the key
+# `reset` writes back is a key the baseline knows about.
+check(T.install_only_keys(T.load_baseline()).get(T.TOUCHCOLORS) is None,
+      "test setup: no orphans to re-baseline yet")
+planted = T.load_file(colors_path, T.TOUCHCOLORS)
+planted.data[NEW_BUILD_KEY] = NEW_BUILD_VALUE
+colors_path.write_bytes(planted.to_bytes())
+check(T.install_only_keys(T.load_baseline()).get(T.TOUCHCOLORS) == [NEW_BUILD_KEY],
+      "test setup: the install holds the new build's key again")
+
+T.capture(force=True, into_shadow=True)
+check((T.baseline_shadow_dir / T.TOUCHCOLORS).exists(),
+      "capture --local writes into baseline.local/")
+check(T.load_file(T.baseline_shadow_dir / T.TOUCHCOLORS,
+                  T.TOUCHCOLORS).data.get(NEW_BUILD_KEY) == NEW_BUILD_VALUE,
+      "and captures the key into it, which is the point")
+check(NEW_BUILD_KEY not in T.load_file(T.baseline_shipped_dir / T.TOUCHCOLORS,
+                                       T.TOUCHCOLORS).data,
+      "and leaves the committed baseline alone")
+
+# The build number `cmd_capture` prints must come from the file it just wrote.
+# It read `baseline_version()` instead, which resolves `baseline_dir` - frozen at
+# import, before this capture created the shadow - so it reported the *committed*
+# baseline's build. Invisible while both builds matched, and wrong exactly when
+# someone runs this on a different build, which is the only reason to.
+# The shipped fixture is given a deliberately impossible build so the two cannot
+# be confused, then restored.
+_shipped_version = T.baseline_shipped_dir / "version.json"
+_shipped_bytes = _shipped_version.read_bytes()
+try:
+    _shipped_version.write_bytes(json.dumps(
+        {"td_build": "0000.00000", "captured": "x", "icons": 1}).encode())
+    with contextlib.redirect_stdout(io.StringIO()) as local_capture:
+        tdtheme_cli.main(["capture", "--local", "--force"])
+    _printed = [l for l in local_capture.getvalue().splitlines() if "build" in l]
+    _recorded = json.loads(
+        (T.baseline_shadow_dir / "version.json").read_text())["td_build"]
+    check(_printed and _recorded in _printed[0],
+          f"capture --local reports the build it just recorded, not the "
+          f"committed baseline's ({_printed})")
+    check("0000.00000" not in local_capture.getvalue(),
+          "and does not report the committed baseline's build at all")
+finally:
+    _shipped_version.write_bytes(_shipped_bytes)
+    # The capture above rewrote the shadow's stores; recapture so the checks
+    # below still start from the state they were written against.
+    T.capture(force=True, into_shadow=True)
+# The shadow is resolved at import, so it only takes effect for a later process.
+# Point the module at it the way a fresh run would, or the checks below would
+# silently exercise the shipped baseline and pass for the wrong reason.
+T.baseline_dir = T.baseline_shadow_dir
+check(T.baseline_is_shadowed(),
+      "and the shadow is what later commands use")
+check(T.install_only_keys(T.load_baseline()).get(T.TOUCHCOLORS) is None,
+      "so the key is no longer an orphan - it is a baseline key now")
+with contextlib.redirect_stdout(io.StringIO()) as post_capture:
+    with contextlib.redirect_stderr(io.StringIO()):
+        post_code = tdtheme_cli.main(["apply", "default"])
+check(post_code == 0, f"and the apply the refusal blocked now works ({post_code})")
+check(NEW_BUILD_KEY in T.load_file(colors_path, T.TOUCHCOLORS).data,
+      "and the key survives it")
+
+# Put the install back to stock first, while the shadow still knows the key:
+# dropping the shadow while the key is in the install would leave the teardown
+# below facing exactly the refusal this section is about.
+T.apply("default")
+(colors_path).write_bytes(STOCK[T.TOUCHCOLORS])
+check(T.status().clean, "the install is clean to end on")
+
+# Now drop the shadow and point the module back, so this section leaves no trace
+# and the shadow cannot affect anything that runs after it.
+check(not T.baseline_shipped_dir.exists() or
+      T.baseline_shipped_dir != T.baseline_shadow_dir,
+      "test setup: the shipped baseline and the shadow are distinct directories")
+shutil.rmtree(T.baseline_shadow_dir, ignore_errors=True)
+T.baseline_dir = T.baseline_shipped_dir
+check(not T.install_only_keys(T.load_baseline()),
+      "and with it gone, the install is back to a state the baseline fully describes")
 
 print()
 print("-" * 60)

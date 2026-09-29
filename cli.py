@@ -8,6 +8,7 @@ output and maps exit codes.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 import tdicons
@@ -71,19 +72,58 @@ def _icon_line(theme: str) -> str:
 
 
 def cmd_capture(args) -> int:
-    written = T.capture(force=args.force)
-    version = T.baseline_version()
+    # `baseline/` is tracked, so overwriting it is a change every other user of
+    # this checkout inherits. `--force` already says "I meant it", and --local is
+    # the way to not mean it. Between the two, the shared file is only replaced
+    # when the ask was unambiguous.
+    if args.force and not args.local and T.baseline_dir == T.baseline_shipped_dir:
+        print("Refusing: this overwrites the committed baseline, which every "
+              "other user of this checkout diffs against.\n"
+              "  --force   replace it anyway\n"
+              f"  --local   capture into {T.baseline_shadow_dir.name}/ instead, and "
+              "leave it alone",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    written = T.capture(force=args.force, into_shadow=args.local)
+    # The directory the icons actually went to, which is the shadow when
+    # capturing into one. Reading it back through `baseline_icons_dir()` is wrong
+    # whenever the two differ, and they differ exactly when `--local` created the
+    # shadow: the module resolved its baseline at import, before the directory it
+    # would come to exist.
+    icons_target = T.baseline_shadow_dir / T.ICONS_DIRNAME if args.local else T.baseline_icons_dir()
+    # Read the build back from the file this capture just wrote, not through
+    # `baseline_version()`. That reads `baseline_dir`, which was resolved at
+    # import - before a `--local` capture created the shadow - so it reports the
+    # committed baseline's build and not the one just recorded. Invisible while
+    # both builds matched, and wrong precisely when the user is on a different
+    # build, which is the only reason to run this command.
+    captured = json.loads(
+        (T.baseline_shadow_dir if args.local else T.baseline_dir)
+        .joinpath("version.json").read_text())
+    # `icons` used to be everything that is not a store, which swept in the
+    # `ui.tox` capture and then tried to stat it inside the icon directory. It
+    # stayed hidden while capture wrote to the same place it was reporting; with
+    # a shadow the reported path and the written path can differ, and the
+    # mismatch became a FileNotFoundError. Select the icons by where they were
+    # written rather than by elimination.
     stores = [n for n in written if n in T.STORE_FILES]
-    icons = [n for n in written if n not in T.STORE_FILES]
+    icons = [n for n in written if written[n].parent == icons_target]
     print("Captured baseline:")
     for name in stores:
         print(f"    {name:<14} {written[name]}")
     if icons:
-        total = sum((T.baseline_icons_dir() / n).stat().st_size for n in icons)
+        total = sum((icons_target / n).stat().st_size for n in icons)
         print(f"    {'Icons':<14} {len(icons)} file(s), {total / 1024:.0f} KB "
-              f"-> {T.baseline_icons_dir()}")
-    print(f"    TouchDesigner build {version.get('td_build')}")
-    if not args.force:
+              f"-> {icons_target}")
+    if T.UI_TOX in written:
+        print(f"    {T.SYSTEM_DIRNAME}/{T.UI_TOX:<9} {written[T.UI_TOX]}")
+    print(f"    TouchDesigner build {captured.get('td_build')}")
+    if args.local:
+        print(f"\nEvery later command now merges over {T.baseline_shadow_dir.name}/, "
+              f"not the committed baseline.\nIt is gitignored and local to this checkout. "
+              f"Delete it to go back.")
+    elif not args.force:
         print("\nNote: re-running capture with --force changes what every "
               "existing theme diffs against.")
     return EXIT_OK
@@ -153,11 +193,19 @@ def cmd_diff(args) -> int:
 def cmd_apply(args) -> int:
     try:
         result = T.apply(args.name, force=args.force, icons=not args.no_icons,
-                         backup=args.backup)
+                         backup=args.backup,
+                         allow_unknown=args.allow_unknown)
     except T.ValidationError as exc:
         print(f"Not applied: {exc}", file=sys.stderr)
         _finding_lines(exc.findings)
         print("\nFix these, or re-run with --force to override.", file=sys.stderr)
+        return EXIT_VALIDATION
+    except T.UnknownKeysError as exc:
+        # This is the one refusal where the offending keys are named as a count
+        # and not a list, for the same reason `apply` prints counts and not
+        # names: a build's added keys are unbounded, and the remedy is the same
+        # regardless of which they are.
+        print(f"Not applied: {exc}", file=sys.stderr)
         return EXIT_VALIDATION
 
     print(f"Applied theme {result['theme']!r}")
@@ -227,6 +275,11 @@ def cmd_status(args) -> int:
         print(f"                  RUNNING (pid {', '.join(map(str, state.td_running))})")
     print(f"config dir        {state.config_dir}")
     print(f"baseline          {'captured' if state.baseline_present else 'MISSING - run capture'}")
+    if T.baseline_is_shadowed():
+        # Which baseline is live is otherwise invisible: every command resolves
+        # the same path and a tester cannot tell they are on a private one.
+        print(f"                  {T.baseline_shadow_dir.name}/ - private copy, "
+              f"shadowing the committed {T.baseline_shipped_dir.name}/")
     if state.baseline_present:
         if state.version_match:
             print(f"                  build {state.baseline_version} matches")
@@ -390,6 +443,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("capture", help="snapshot the installed stores and icons as the baseline")
     p.add_argument("--force", action="store_true",
                    help="overwrite an existing baseline")
+    p.add_argument("--local", action="store_true",
+                   help="capture into baseline.local/ (gitignored) instead of the "
+                        "committed baseline/, and use it from then on - the right "
+                        "choice on a TouchDesigner build other than the shipped one")
     p.set_defaults(func=cmd_capture)
 
     p = sub.add_parser("list", help="list available themes")
@@ -411,6 +468,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--backup", action="store_true",
                    help="copy the outgoing stores and icons into backups/ first; "
                         "off by default because re-applying a theme restores them")
+    p.add_argument("--allow-unknown", action="store_true",
+                   help="write even though the install holds keys this baseline "
+                        "has never seen, which drops them")
     p.set_defaults(func=cmd_apply)
 
     p = sub.add_parser("reset", help="restore the stock look (an alias for 'apply default')")
@@ -421,6 +481,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--backup", action="store_true",
                    help="copy the outgoing stores and icons into backups/ first; "
                         "off by default because re-applying a theme restores them")
+    p.add_argument("--allow-unknown", action="store_true",
+                   help="write even though the install holds keys this baseline "
+                        "has never seen, which drops them")
     p.set_defaults(func=cmd_reset)
 
     icons = sub.add_parser("icons", help="inspect icon sets")
