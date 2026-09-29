@@ -134,6 +134,153 @@ message means. `capture --local` writes a gitignored, per-machine copy that ever
 later command prefers, so your install is diffed against the build you actually
 run. It is safe to delete the directory to go back.
 
+## Using it
+
+The whole workflow is four commands. The rest of this README is detail on any
+of them.
+
+### 1. Check it can see your install
+
+```sh
+tdtheme status
+```
+
+```
+TouchDesigner     2025.33230
+config dir        /Applications/TouchDesigner.app/Contents/Resources/tfs/Config
+baseline          captured
+                  baseline.local/ - private copy, shadowing the committed baseline/
+                  build 2025.33230 matches
+themes            bnw, default, defaultnowarn, midnight, mono, pink, sunset
+                  last applied: pink
+```
+
+Three things worth reading here. The **build** tells you which TouchDesigner this
+is, and whether the baseline was captured from the same one. **Drift** — the
+per-file lines further down — tells you whether the files on disk still match
+what `tdtheme` last wrote, which is how you find out that something else changed
+them. And `last applied` is the theme that is currently installed.
+
+If your build is not the one the committed baseline came from, do step 1b.
+
+### 1b. On a different build, capture your own baseline
+
+```sh
+tdtheme capture --local
+```
+
+Skip this on a matching build. It writes a private `baseline.local/` that every
+later command prefers over the committed `baseline/`, so your install is diffed
+against the build you actually run. See
+[If your TouchDesigner is newer than the baseline](#if-your-touchdesigner-is-newer-than-the-baseline).
+
+### 2. See what is on offer
+
+```sh
+tdtheme list
+```
+
+```
+    bnw                  TouchColors 419, TouchOptions 0 icons 97 (all differ in bytes)
+    default              TouchColors 0, TouchOptions 0 icons 97 (all differ in bytes)
+    defaultnowarn        TouchColors 0, TouchOptions 0 icons 1 (96 absent, 1 changed)
+    midnight             TouchColors 20, TouchOptions 0 icons 97 (all differ in bytes)
+    mono                 TouchColors 460, TouchOptions 0 icons 97 (all differ in bytes)
+  * pink                 TouchColors 4, TouchOptions 0 icons 97 (stock bytes)
+    sunset               TouchColors 17, TouchOptions 1 icons 97 (all differ in bytes)
+
+* = last applied by tdtheme (pink).
+```
+
+`mono` changes 460 keys, `midnight` changes 20. The number is the size of the
+change, so it is the first thing to look at when picking one. The `icons` column
+counts bytes rather than pixels, so that `list` stays fast enough to read at a
+glance — `tdtheme icons diff` is the pixel-accurate version.
+
+To read the individual changes before applying anything:
+
+```sh
+tdtheme diff midnight
+```
+
+That lists every key with its old and new value. Nothing is written.
+
+### 3. Apply one
+
+```sh
+tdtheme apply midnight
+```
+
+Then **restart TouchDesigner**. It reads the two stores at startup, and each
+icon is cached the first time it is drawn — so an icon change is not even looked
+at until a restart, let alone a new process.
+
+```
+Applied theme 'midnight'
+    TouchColors: 20 changed
+    TouchOptions: unchanged
+    icons: 97 written, 0 already matched the baseline
+    ui.tox: written from default (this theme has no ui.tox)
+    TouchDesigner is closed; changes are live on next launch.
+```
+
+Both stores always print, because `unchanged` is a real answer and silence
+would read as a bug. These are counts, not a change report — the largest
+shipped theme changes 460 keys, and a line naming them is a line nobody reads.
+For the key-by-key listing, `tdtheme diff` is the tool.
+
+Note the last line: if TouchDesigner is open when you apply, the change lands on
+disk but you will not see it until a restart, and the message tells you so
+rather than letting you think it failed.
+
+### 4. Go back
+
+```sh
+tdtheme reset
+```
+
+An alias for `apply default`. There is no undo stack: the install is a pure
+function of the baseline and the theme, both in git, so re-applying the previous
+theme restores the exact bytes. See
+[Undo is re-applying, not restoring](#undo-is-re-applying-not-restoring).
+
+### Looking at the icons
+
+The icon set is the part you cannot judge from a number, so it gets its own
+commands:
+
+```sh
+tdtheme icons preview midnight   # a PNG contact sheet of all 97 glyphs
+tdtheme icons diff midnight      # which icons this theme actually repaints
+tdtheme icons list               # size and digest per file
+```
+
+`preview` writes `testiconsforagents/<theme>-icons.png` — a gitignored scratch
+directory, so it will not dirty your checkout. It is the fastest way to see what
+a theme does, and worth running before any `apply`. Open the PNG in Preview.
+
+### Making your own
+
+Authoring is a separate command, `tdthememaker`, because it is a different job —
+it generates things, `tdtheme` only merges and installs them.
+
+```sh
+tdthememaker list                   # the available recipes
+tdthememaker build midnight         # generate that icon set from its recipe
+tdthememaker preview midnight       # render it to a PNG
+tdtheme apply midnight              # install the finished theme
+```
+
+`build` takes the *name* of a recipe, and writes into that theme's `Icons/`
+directory. Two flags matter: `--check` reports what it would do without failing
+on an existing set, and `--force` overwrites one. Note that `build midnight`
+overwrites the *shipped* `midnight` recipe's output — which is fine to try and
+worth reverting with `git checkout themes/` if you want the committed set back.
+
+`tdthememaker export` does the reverse: it records your current install as a
+new theme, which is the easy way to start one from your own colours. See
+[Writing themes](#writing-themes).
+
 ## What it actually edits
 
 Two files, one directory and a third file, inside the app bundle:
