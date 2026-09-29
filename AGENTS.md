@@ -105,7 +105,11 @@ The line still prints when `--backup` is given, and it names the set it wrote.
 - **`docs/icon-storage-design.md` is an unimplemented proposal**, deliberately.
   It is not a description of current behaviour. Do not "fix" code to match it.
 - **A theme ships all 97 icons, and `apply` fills the rest from the baseline.**
-  Both halves are load-bearing, and the second looks redundant next to the
+  Six of the seven themes ship all 97, but `defaultnowarn` ships exactly one -
+  `WarnFace.tiff`, 1,354 B - and leans on the fill for the other 96, so the
+  second half is load-bearing *right now* rather than hypothetically: drop
+  `fill_from` and that theme installs 1 icon instead of 97, silently. Both halves
+  are load-bearing, and the second looks redundant next to the
   first, so it is the first thing to get "simplified" away. `copy_icons` takes
   `fill_from=baseline_icons_dir()`; without it `apply` was only a total
   overwrite while every set happened to be complete, and a partial set left the
@@ -167,17 +171,32 @@ These cost time. They are properties of the code, not opinions.
 - **`diff` only looks in `other`.** `tdtheme.diff(base, other)` reports keys
   *in `other`* that are added or changed, and cannot report a key that `other`
   does not have. That is correct for `tdtheme diff`, whose question is what a
-  theme *adds to* the baseline. It is not sufficient for "what did this apply
-  change", because an overlay may add a key the baseline lacks and the next
-  theme will drop it — a key that is absent from the comparison and therefore
-  invisible. `store_changes` wraps `diff` and adds the dropped keys, and
-  `apply` returns both halves as `result["changes"]` — **as data, not as
-  output**. Do not build a change-report on bare `diff` and conclude removals
-  are impossible; they are merely unreported. And note that `apply` deliberately
-  prints nothing about the two stores: a per-store "N setting(s) changed" line
-  was implemented and then removed, on the same reasoning as the missing
-  "backup: none" line. `tests/test_tdtheme.py` pins the absence, so putting it
-  back is a change to that check rather than an addition to `cli.py`.
+    theme *adds to* the baseline. It is not sufficient for "what did this apply
+    change", because an overlay may add a key the baseline lacks and the next
+    theme will drop it — a key that is absent from the comparison and therefore
+    invisible. `store_changes` wraps `diff` and adds the dropped keys, and
+    `apply` returns both halves as `result["changes"]`. Do not build a
+    change-report on bare `diff` and conclude removals are impossible; they are
+    merely unreported.
+  - **`apply` prints a per-store count, and no key names.** `TouchColors: 460
+    changed` is a count, not a change report. It went through three states and
+    the current one is the third: named per-key groups
+    (`parms 120, tile 48, georender 48`) were implemented, then removed
+    entirely, then restored as a bare count. What settles it is *why*: a store
+    line is a line per file, so it is parallel to the icons and `ui.tox` lines
+    rather than a report, and the count is the part that answers "did this
+    theme do anything here". Both stores are always printed, because
+    `TouchOptions: unchanged` is a real answer and silence reads as a bug.
+    Removals are counted on the same line (`12 changed, 3 removed`) because a
+    dropped key is a line that left the file — the direction bare `diff` cannot
+    see. What must not come back: the key names. The largest shipped theme
+    changes 460 keys, and `tdtheme diff` is the listing.
+    `tests/test_tdtheme.py` pins the count *and* the absence of key names, so
+    adding either is a change to that check rather than an addition to
+    `cli.py`. Note this is the opposite of the "backup: none" line, which is
+    absent and must stay absent: one reports a thing that happened, the other
+    announced a thing that did not.
+
 - **Implicit protocol calls defeat grep.** `len(x)` and `x in y` reach
   `__len__` and `__contains__` without either name appearing at the call site.
   `TdFile.__len__` and `TdFile.__contains__` look unused to a grep and are used

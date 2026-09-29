@@ -1,10 +1,9 @@
 """Tests for merge / diff / validate / capture / apply / export.
 
 Everything runs against a throwaway copy of the stores in a temp directory,
-selected via the TDTHEME_CONFIG environment variable. The real TouchDesigner
-config is only ever read. The copy is seeded from the project's pristine
-`baseline/`, so the suite is independent of which theme is currently applied to
-the real install.
+selected via the TDTHEME_CONFIG environment variable; the real TouchDesigner
+config is only ever read. The copy is seeded from the pristine `baseline/` - see
+the fixture below for why that matters.
 
 Run:  python3 tests/test_tdtheme.py
 """
@@ -29,9 +28,9 @@ import tdtheme as T
 def overlay_text(data, name=""):
     """A sparse overlay, in the subset format `tdthememaker export` writes.
 
-    Written out by hand here on purpose. A theme is a human-editable artifact,
-    so the thing worth testing is that apply reads a file a person wrote, not
-    that a writer and a reader agree with each other.
+    Written out by hand on purpose: a theme is a human-editable artifact, so
+    what is worth testing is that apply reads a file a person wrote, not that a
+    writer and a reader agree with each other.
     """
     lines = ["# tdtheme sparse overlay - only keys that differ from baseline.",
              f"# file: {name}", ""]
@@ -67,14 +66,12 @@ def raises(exc_type, fn, label: str):
 
 PROJECT = Path(__file__).resolve().parent.parent
 
-# Seed the throwaway install from the *pristine baseline*, not from the live
-# TouchDesigner config. Several assertions below are statements about what the
-# vendor ships (`POP.hilite` above 1.0, `tile.inout.origsize` 10, no findings at
-# all). Reading those from the live install made the suite fail whenever a theme
-# happened to be applied - the suite was asserting the absence of a theme, not
-# the correctness of the code. The baseline is the pristine capture, tracked in
-# git, and is what every theme diffs against, so it is the right reference.
-# Falls back to the live install only if the baseline is missing.
+# Seed the throwaway install from the *pristine baseline*, not the live config.
+# Assertions below about what the vendor ships (`POP.hilite` above 1.0,
+# `tile.inout.origsize` 10, no findings at all) failed whenever a theme happened
+# to be applied, asserting the absence of a theme rather than the correctness of
+# the code. The baseline is the pristine capture, tracked in git, and what every
+# theme diffs against; it falls back to the live install only if it is missing.
 SEED = PROJECT / "baseline"
 if not all((SEED / store).exists() for store in T.STORE_FILES):
     SEED = T.TD_CONFIG
@@ -112,8 +109,7 @@ sample = OrderedDict([
     ('key.with"quote', ['a"b', "", "x y"]),
 ])
 # The writer for this subset moved to tdthememaker with `export`; the reader
-# stayed, because applying a theme needs it. A literal stands in for the writer
-# here, and tdthememaker's suite checks that the two agree.
+# stayed, because applying a theme needs it.
 text = ("# tdtheme sparse overlay - only keys that differ from baseline.\n"
         "# file: TouchOptions\n"
         "\n"
@@ -124,14 +120,14 @@ text = ("# tdtheme sparse overlay - only keys that differ from baseline.\n"
 loaded = T.load_overlay(text, "TouchOptions")
 check(loaded == sample, "overlay round-trips through loader")
 
-# The same text through the zero-dependency path (no PyYAML here).
+# The same text through the zero-dependency path.
 manual = T._load_overlay_fallback(text, "TouchOptions")
 check(manual == sample, "overlay round-trips through the fallback loader")
 check(manual == loaded, "fallback and yaml loaders agree (when yaml absent)")
 
 # Whether PyYAML is importable is a property of the machine, not of this code.
 # Asserting it outright made the suite fail on a correctly provisioned host, so
-# record it instead: the fallback is exercised exactly when yaml is absent.
+# it is only recorded: the fallback is exercised exactly when yaml is absent.
 print(f"  note: PyYAML {'present' if T._have_yaml() else 'absent'}"
       f" - fallback loader {'NOT ' if T._have_yaml() else ''}exercised")
 
@@ -152,13 +148,13 @@ check(T.load_overlay("a.b: 5\n", "x") == OrderedDict([("a.b", ["5"])]),
 
 # --- the two loaders must not disagree, on real files ----------------------
 #
-# A theme installs the same bytes whichever interpreter runs the tool, so the
-# PyYAML path and the fallback path have to return the same data for the same
-# file. They agree by construction on anything `json.loads` accepts, because
-# JSON is a subset of YAML. They used to disagree on everything else: the
-# fallback is `json.loads(rest)` and otherwise keeps the raw string, so a
-# single-quoted scalar came back with its quotes still attached. Nothing
-# compared the two, so the suite stayed green on both interpreters.
+# A theme installs the same bytes whichever interpreter runs the tool, so both
+# loaders have to return the same data for the same file. They agree by
+# construction on anything `json.loads` accepts, since JSON is a subset of YAML.
+# They used to disagree on everything else: the fallback is `json.loads(rest)`
+# and otherwise keeps the raw string, so a single-quoted scalar came back with
+# its quotes still attached. Nothing compared the two, so the suite stayed green
+# on both interpreters.
 #
 # Compared over the committed overlays rather than a literal, because the
 # failure mode is "a file someone actually committed parses differently".
@@ -184,8 +180,8 @@ check(not disagree,
 
 # Single quotes are the case that actually bit: `origsize: '11'` loaded as the
 # three characters '11' under the fallback and as 11 under PyYAML, so the same
-# theme installed differently on different machines. The fallback now refuses
-# it and names the forms that mean the same thing in both loaders.
+# theme installed differently on different machines. The fallback now refuses it
+# and names the forms that mean the same thing in both loaders.
 for _label, _text in (("scalar", "tile.inout.origsize: '11'\n"),
                       ("list", "worksheet.bg: ['0.1', '0.2']\n")):
     raises(T.FileFormatError,
@@ -203,12 +199,11 @@ check(T._load_overlay_fallback("tile.inout.label: it's fine\n", "x")
       == OrderedDict([("tile.inout.label", ["it's fine"])]),
       "an apostrophe inside a value is not mistaken for quoting")
 
-# The same reasoning closes the rest of the class. Each of these is a YAML
-# construct the restricted loader cannot replicate, and each used to be kept as
-# literal text while PyYAML interpreted it - a silent disagreement, which is
-# worse than the single-quote case because nothing looks wrong. A flow mapping
-# installed as the string `{a: 1}`; an alias installed as `*x` where PyYAML
-# resolved it to the anchored value.
+# The rest of the class. Each of these is a YAML construct the restricted
+# loader cannot replicate, and each used to be kept as literal text while PyYAML
+# interpreted it - a silent disagreement, worse than the single-quote case
+# because nothing looks wrong. A flow mapping installed as the string `{a: 1}`;
+# an alias installed as `*x` where PyYAML resolved it to the anchored value.
 for _label, _text in (("flow mapping", "k: {a: 1}\n"),
                       ("anchor", "a: &x 1\n"),
                       ("alias", "b: *x\n"),
@@ -245,11 +240,10 @@ for _label, _text in (("bare", "tile.inout.origsize: 11\n"),
     check(T._load_overlay_fallback(_text, "x") == T.load_overlay(_text, "x"),
           f"documented {_label} form loads identically in both loaders")
 
-# --- a non-numeric size is an error, not a warning --------------------------
-#
-# This is the other half of the same bug. `apply` gates on severity "error"
-# only, so as a warning the quoted size sailed through and was written into the
-# install; TouchDesigner then read an unparseable geometry.
+# A non-numeric size is an error, not a warning: this is the other half of the
+# same bug. `apply` gates on severity "error" only, so as a warning the quoted
+# size sailed through and was written into the install, and TouchDesigner then
+# read an unparseable geometry.
 _options_base = T.load_file(SEED / T.TOUCHOPTIONS, T.TOUCHOPTIONS)
 _quoted = _options_base.copy()
 _quoted.data["tile.inout.origsize"] = ["'11'"]
@@ -305,8 +299,8 @@ check([f for f in T.validate(neg, base) if f.severity == "error"],
       "negative size is caught too")
 
 # The real shipped baseline must validate completely clean - no false
-# positives. Regression guard: an unconditional "size > 0" rule flags the
-# shipped `font.relative.size 0`, which would make every apply fail.
+# positives. An unconditional "size > 0" rule flags the shipped
+# `font.relative.size 0`, which would make every apply fail.
 real_base = T.load_file(install / T.TOUCHOPTIONS, T.TOUCHOPTIONS)
 shipped_findings = T.validate(real_base, real_base)
 check(not shipped_findings,
@@ -353,7 +347,7 @@ check(T.diff(colors_base, over)["POP.hilite"] == ["0.56", "0.6", "9.9"],
 # Regression cover for a real corruption: `worksheet.grid` was hand-edited to
 # `0.317 0.189 <TAB> 0.15`, merging two channels into one space-separated
 # field. parse() accepted it, serialize() reproduced it, export() captured it
-# and validate() reported nothing. The install ended up holding a file
+# and validate() reported nothing - so the install ended up holding a file
 # TouchDesigner cannot read.
 
 print()
@@ -361,11 +355,10 @@ print("Colour field integrity")
 print("-" * 60)
 
 # The guard is stated against the pristine baseline, not the live install: the
-# point is that a *shipped* file is clean. Using the install here would make a
-# future corruption read as a validation failure of this rule.
-#
-# T.baseline_dir / T.themes_dir are repointed at the tmpdir by the fixture, so
-# reach the real project copies via PROJECT rather than through the module.
+# point is that a *shipped* file is clean. (T.baseline_dir / T.themes_dir are
+# repointed at the tmpdir by the fixture, so the real project copies are reached
+# via PROJECT.) Using the install here would make a future corruption read as a
+# validation failure of this rule.
 pristine_colors = T.load_file(PROJECT / "baseline" / T.TOUCHCOLORS, T.TOUCHCOLORS)
 check(not T.validate(pristine_colors, pristine_colors),
       f"the pristine shipped TouchColors baseline produces no findings at all "
@@ -421,10 +414,10 @@ if _sunset_path.exists():
 
 # ------------------------------------------------------- monochrome themes
 #
-# `mono` and `bnw` are two passes at the same brief, so the claims they
-# share are asserted once and each theme's own claims follow. The design
-# claims live in prose in each theme's header; these tests exist so that if
-# a future edit breaks one, something says so.
+# `mono` and `bnw` are two passes at the same brief, so the claims they share
+# are asserted once and each theme's own claims follow. The design claims live
+# in prose in each theme's header; these tests exist so a future edit that
+# breaks one is called out.
 
 print()
 print("Monochrome themes (mono, bnw)")
@@ -448,10 +441,10 @@ def _contrast(fg, bg):
 
 def _desat_lum(rgb):
     """The greyscale the themes are actually built from: a weighted sum of the
-    raw sRGB channels, with no linearisation. Distinct from `_srgb_lum`, which
-    is the WCAG relative luminance used for contrast - the two disagree for
-    anything that is not already grey, and a key kept on plain luminance has
-    to be compared against this one."""
+    raw sRGB channels, with no linearisation. Distinct from `_srgb_lum`, the
+    WCAG relative luminance used for contrast - the two disagree for anything
+    not already grey, and a key on plain luminance has to be compared against
+    this one."""
     r, g, b = (float(x) for x in rgb[-3:])
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
@@ -459,9 +452,9 @@ def _desat_lum(rgb):
 def _param_draws(theme):
     """Every (fg, bg) pair the parameter dialog can paint.
 
-    A widget is drawn as a pair, so a family with `bg[SUFF]` but no
-    `fg[SUFF]` falls back to the bare `fg`; that combination is invisible to
-    a per-suffix check and is included here.
+    A widget is drawn as a pair, so a family with `bg[SUFF]` but no `fg[SUFF]`
+    falls back to the bare `fg`; that combination is invisible to a per-suffix
+    check and is included here.
     """
     fams = {}
     for k in theme.keys():
@@ -486,10 +479,9 @@ def _param_draws(theme):
 _EXPECTED_COLOUR = {"ramp.red", "ramp.green", "ramp.blue", "ramp.saturation"}
 
 # `bnw` additionally declines to restyle interface text, so it inherits eight
-# keys that ship with a hue. Each one is a status or marker glyph where the
-# colour is the message: green tick, red cross, red bypass, yellow notch. They
-# are listed here rather than derived, because the claim worth making is that
-# this set has not grown - a new coloured key means a new exemption crept in.
+# keys that ship with a hue, each a status or marker glyph where the colour is
+# the message: green tick, red cross, red bypass, yellow notch. Listed rather
+# than derived, because the claim is that this set has not grown.
 _SHIPPED_TEXT_COLOUR = {
     "circle.check", "circle.minus", "knob.notch", "tile.flag.bypass.cross",
     "default.label", "geodetail.fg", "swatch.none.text", "tooltip.fg.value",
@@ -554,22 +546,20 @@ for _name, (_overlay, _theme) in loaded.items():
           f"(found {sorted(_coloured)})")
 
     # The exemption above is only defensible because every coloured key it
-    # allows is a glyph or a text colour. A coloured *fill* would be a
-    # different claim entirely - a tinted panel - and is not what the header
-    # says this theme does.
+    # allows is a glyph or a text colour; a coloured *fill* is a different claim
+    # entirely - a tinted panel - and not what the header says this theme does.
     check(not [k for k in _coloured if k.endswith(".bg")],
           f"{_name} keeps hue out of every fill "
           f"(coloured fills: {sorted(k for k in _coloured if k.endswith('.bg'))})")
 
-    # Shared claim 2: a state sibling must not become *invisible*, which is a
-    # weaker and more honest requirement than "must not share a tone". A
-    # widget is drawn as a (fg, bg) pair, so `parms.button.bg` collapsing
-    # into `parms.button.bg.disabled` costs nothing as long as `.fg.disabled`
-    # differs - the button still greys out. Comparing single channels
-    # penalises that case and misses the real one, where a bg collapses and
-    # the fg collapses with it.
+    # Shared claim 2: a state sibling must not become *invisible*, a weaker and
+    # more honest requirement than "must not share a tone". A widget is drawn as
+    # a (fg, bg) pair, so `parms.button.bg` collapsing into
+    # `parms.button.bg.disabled` costs nothing as long as `.fg.disabled`
+    # differs; comparing single channels penalises that case and misses the real
+    # one, where a bg collapses and the fg collapses with it.
     #
-    # Pairs the vendor ships as identical (`parms.button.border` and
+    # Pairs the vendor ships identical (`parms.button.border` and
     # `.border.disabled` are both 0.2) are their choice, not a collapse this
     # theme introduced, so they are excluded.
     _invisible = []
@@ -617,9 +607,8 @@ for _name, (_overlay, _theme) in loaded.items():
     if _name == "mono":
         # Claim: this is a scale, not a palette. It keeps each key's shipped
         # brightness, so it is supposed to need many tones. The guard is
-        # deliberately two-sided - if this number drops, the theme has
-        # quietly become bnw, and if it rises, the ordering guarantee below
-        # is the thing that broke.
+        # two-sided - if this number drops, the theme has quietly become bnw,
+        # and if it rises, the ordering guarantee below is what broke.
         check(_distinct >= 40,
               f"mono stays a luminance scale, not a palette "
               f"({_distinct} distinct tones)")
@@ -633,10 +622,10 @@ for _name, (_overlay, _theme) in loaded.items():
         _ship = {k: _srgb_lum(pristine_colors.get(k)) for k in _lum}
         _derived = sorted(k for k in _lum
                           if abs(_lum[k] - _ship[k]) <= 0.01)
-        # A key is inverted only if it is meaningfully brighter in the
-        # shipped file and meaningfully darker here. Without a tolerance this
-        # measures rounding: luminance is stored to two decimals, so two keys
-        # that ship 0.004 apart can land either way round.
+        # Inverted means meaningfully brighter in the shipped file and
+        # meaningfully darker here. Without a tolerance this measures rounding:
+        # luminance is stored to two decimals, so keys 0.004 apart can land
+        # either way round.
         _tol = 0.02
         _order = sorted(_derived, key=lambda k: -_ship[k])
         _flips = []
@@ -650,13 +639,13 @@ for _name, (_overlay, _theme) in loaded.items():
               f"{len(_derived)} luminance-derived keys (flips: {_flips[:2]})")
 
     if _name == "bnw":
-        # The parameter window is deliberately exempt from the four-tone
-        # palette (see its header), so these claims are about the rest of the
-        # interface. Scoring the whole file would let 100 luminance keys
-        # quietly prove a claim about a screen they are not on. Interface text
-        # is exempt too, and for a stronger reason: those keys are not this
-        # theme's palette at all, they are whatever TouchDesigner ships, so
-        # the claim is made over the keys the overlay actually authors.
+        # The parameter window is deliberately exempt from the four-tone palette
+        # (see its header), so these claims are about the rest of the interface:
+        # scoring the whole file would let 100 luminance keys quietly prove a
+        # claim about a screen they are not on. Interface text is exempt too,
+        # for a stronger reason - those keys are not this theme's palette at
+        # all but whatever TouchDesigner ships - so the claim is made over the
+        # keys the overlay actually authors.
         _ov = [k for k in loaded[_name][0].keys()
                if k and not k.startswith("parms.")]
         _ov_tones = {round(float(_theme.get(k)[-1]), 4) for k in _ov}
@@ -672,10 +661,10 @@ for _name, (_overlay, _theme) in loaded.items():
               f"({_out_end / len(_out):.0%})")
 
         # Claim: the graph grid is structure, not text. The role table maps
-        # `.axes` to PAPER and the cliff sends `.axes.main` to INK, so on a
-        # 0.0 graph background that is a white minor grid and an invisible
-        # main axis. Neither is guarded by the palette checks above, because
-        # both are legal four-tone values; only their relationship is wrong.
+        # `.axes` to PAPER and the cliff sends `.axes.main` to INK, so on a 0.0
+        # graph background that is a white minor grid and an invisible main
+        # axis. Neither is guarded by the palette checks above, both being legal
+        # four-tone values; only their relationship is wrong.
         _grid = {k: round(float(_theme.get(k)[-1]), 4) for k in
                  ("graph.grid.axes", "graph.grid.axes.main")}
         check(_grid["graph.grid.axes"] < 1.0,
@@ -690,11 +679,11 @@ for _name, (_overlay, _theme) in loaded.items():
         # theme inverts a fill, the shipped text colour can land on top of it.
         # This is the check that found the three keys in TEXT_CONTRAST_RESCUE.
         #
-        # The bar is deliberately "readable", not "unchanged": this theme
-        # inverts fills on purpose, so a pair may legitimately get worse and
-        # still be fine - `tile.name.fg` on the LINE tile is 4.65:1, down from
-        # 6.89:1. What is not allowed is being both worse than shipped *and*
-        # under 4.5:1, which is how the three rescued keys were found.
+        # The bar is "readable", not "unchanged": this theme inverts fills on
+        # purpose, so a pair may get worse and still be fine - `tile.name.fg` on
+        # the LINE tile is 4.65:1, down from 6.89:1. Being both worse than
+        # shipped *and* under 4.5:1 is what is not allowed, and that is how the
+        # three rescued keys were found.
         _drawn = []
         for _k in _theme.keys():
             if not _k or not _k.endswith(".fg"):
@@ -717,8 +706,7 @@ for _name, (_overlay, _theme) in loaded.items():
         # Claim: the parameter window is honest to the shipped luminance. This
         # is the decision that made the window readable, so it is checked
         # against the baseline rather than trusted - including the exact list
-        # of keys allowed to deviate, which is where a hand-set value would
-        # otherwise creep in unnoticed.
+        # of keys allowed to deviate, where a hand-set value would creep in.
         _HAND = {
             "parms.bind.fg", "parms.bind.bg.enabled",
             "parms.err.bg", "parms.err.fg",
@@ -730,9 +718,9 @@ for _name, (_overlay, _theme) in loaded.items():
         for _k in _theme.keys():
             if not _k or not _k.startswith("parms.") or _k in _HAND:
                 continue
-            # 0.01 rather than 0.005: luminance is stored to two decimals, so
-            # a key built from it is always that far from the true value, and
-            # a genuine hand-set key lands much further away than that.
+            # 0.01 rather than 0.005: luminance is stored to two decimals, so a
+            # key built from it is always that far from the true value, while a
+            # genuine hand-set key lands much further away.
             _want = _desat_lum(pristine_colors.get(_k))
             if abs(float(_theme.get(_k)[-1]) - _want) > 0.01:
                 _off.append((_k, _theme.get(_k)[-1], round(_want, 3)))
@@ -740,12 +728,12 @@ for _name, (_overlay, _theme) in loaded.items():
               f"the parameter window is plain shipped luminance on every key "
               f"except the {len(_HAND)} named ones (offenders: {_off[:2]})")
 
-        # Claim: nothing in the window is invisible, and the window is not
-        # worse than what TouchDesigner ships. Luminance alone does not give
-        # either - the shipped file contains pairs that are 1.0:1, and
-        # desaturating can lose ground where the shipped difference was
-        # carried by hue. 0.5 ratio points is above the worst rounding drift
-        # this theme actually has (0.25) and far below a real regression.
+        # Claim: nothing in the window is invisible, and the window is not worse
+        # than what TouchDesigner ships. Luminance alone gives neither - the
+        # shipped file contains pairs that are 1.0:1, and desaturating can lose
+        # ground where the shipped difference was carried by hue. 0.5 ratio
+        # points is above this theme's worst rounding drift (0.25) and far below
+        # a real regression.
         _draws = _param_draws(_theme)
         _ratios = [(_contrast(_theme.get(f), _theme.get(b)), f, b)
                    for f, b in _draws]
@@ -767,12 +755,11 @@ for _name, (_overlay, _theme) in loaded.items():
               f"regressions: {_lost[:2]})")
 
 # The two themes must actually differ, or one of them is redundant. The
-# interesting part is *where* they differ: `bnw` puts the parameter window on
-# plain luminance, so from this change onward that window is largely shared
-# with `mono` by design, and the two themes are distinguished by the rest of
-# the interface. Asserting "they differ on most of the file" alone would let
-# the parameter window drift back to the four-tone palette unnoticed, so both
-# halves are stated.
+# interesting part is *where*: `bnw` puts the parameter window on plain
+# luminance, so from here that window is largely shared with `mono` by design
+# and the themes are distinguished by the rest of the interface. Asserting
+# "they differ on most of the file" alone would let the parameter window drift
+# back to the four-tone palette unnoticed, so both halves are stated.
 if len(loaded) == 2:
     # [1] is the merged theme; [0] is the overlay, which only holds the keys
     # the theme bothers to change.
@@ -817,9 +804,8 @@ print()
 print("Apply")
 print("-" * 60)
 
-# The theme to apply. `export` used to create this one; it now lives in
-# tdthememaker, so build it here as a hand-written overlay - which is what a
-# theme usually is anyway.
+# The theme to apply: `export` used to build this one and now lives in
+# tdthememaker, so it is hand-written here - which is what a theme usually is.
 sparse = OrderedDict([
     ("tile.connection.hilite1", ["0.25", "0.5", "0.75"]),
     ("default.tile.line", ["0.1", "0.2", "0.3"]),
@@ -832,9 +818,9 @@ for store in T.STORE_FILES:
                  overlay_text(sparse if store == T.TOUCHCOLORS else OrderedDict(),
                               store).encode())
 
-# Applying a theme that was exported from the current install would be a
-# no-op, so move the install somewhere else first. That makes the backup
-# assertion meaningful.
+# Applying a theme exported from the current install would be a no-op, so move
+# the install somewhere else first - that also makes the backup assertion
+# meaningful.
 THIRD_VALUE = ["0.9", "0.8", "0.7"]
 (install / T.TOUCHCOLORS).write_bytes(
     T.merge(colors_base, OrderedDict([("tile.connection.hilite1", THIRD_VALUE)])).to_bytes()
@@ -852,10 +838,10 @@ check(T.load_file(result["backup"] / T.TOUCHCOLORS).get("tile.connection.hilite1
       == THIRD_VALUE,
       "backup captures exactly the pre-apply state")
 
-# The default, which is the opposite of the above and just as load-bearing.
-# Backups are opt-in because the install is reconstructible from git, so an
-# ordinary apply must touch nothing under backups/ - and must say so, since a
-# line that went missing entirely would read as "none was needed".
+# The default, the opposite of the above and just as load-bearing. Backups are
+# opt-in because the install is reconstructible from git, so an ordinary apply
+# must touch nothing under backups/ - and must say so, since a line that went
+# missing entirely would read as "none was needed".
 sets_before = set(T.backups_dir.glob("*"))
 plain = T.apply("probe")
 check(plain["backup"] is None, "apply reports no backup without --backup")
@@ -905,8 +891,8 @@ state = T.status()
 check(not state.clean, "status detects drift after an external edit")
 check(state.drift[T.TOUCHCOLORS] == 1, "status counts the drifted key")
 
-# Writing a theme from a modified install moved to tdthememaker (`export`).
-# What remains is the half this tool owns: apply a theme, and land it exactly.
+# Writing a theme from a modified install moved to tdthememaker (`export`); what
+# remains is the half this tool owns: apply a theme, and land it exactly.
 (T.themes_dir / "e2e").mkdir(parents=True, exist_ok=True)
 for store in T.STORE_FILES:
     sparse = T.diff(T.load_baseline()[store], T.load_file(install / store, store))
@@ -1001,11 +987,11 @@ check(T.status().applied == "default",
       f"reset records 'default' as the applied theme (got {T.status().applied})")
 
 # `only_changed_against` means untouched icons are not rewritten, so the counts
-# pin the mechanism from both sides: a reset from a dirty state rewrites
-# exactly the two icons that were drifted, and the next one has nothing to do.
-# (The alias reset above already left the install at the baseline, so this has
-# to re-dirty it - otherwise both runs below measure an install with no work
-# to do and the first check passes for the wrong reason.)
+# pin the mechanism from both sides: a reset from a dirty state rewrites exactly
+# the two drifted icons, and the next has nothing to do. (The alias reset above
+# already left the install at the baseline, so this has to re-dirty it - or both
+# runs below measure an install with no work to do and the first check passes
+# for the wrong reason.)
 make_dirty()
 first_reset = T.apply("default")
 check(sorted(first_reset["icons"]["written"]) == sorted(DRIFTED_ICONS)
@@ -1018,9 +1004,9 @@ check(not second_reset["icons"]["written"]
       f"a second reset rewrites nothing "
       f"({len(second_reset['icons']['written'])} written)")
 
-# `reset` is the command people reach for when something has already gone
-# wrong, so --backup has to reach it too. It is an alias, so this is really a
-# check that cmd_reset forwards the flag rather than dropping it on the floor.
+# `reset` is the command people reach for when something has already gone wrong,
+# so --backup has to reach it too - and since it is an alias, what is really
+# being checked is that cmd_reset forwards the flag rather than dropping it.
 make_dirty()
 result = T.apply("default", backup=True)
 backups = sorted(T.backups_dir.glob("*/" + T.TOUCHCOLORS))
@@ -1040,13 +1026,12 @@ check((install / T.TOUCHCOLORS).read_bytes() == STOCK[T.TOUCHCOLORS],
 
 # The output line, in both directions. Pinned as an *absence*, which is the
 # part worth pinning: an earlier version printed "backup: none (...)" on every
-# apply, on the argument that silence would read as "no backup was needed".
-# That was a deliberate change of mind, not an oversight - `--backup` is
-# documented in the command's own help, the recovery path is "re-apply", and
-# `status` names the theme to re-apply. So a line on every run to say that
-# nothing happened is noise. Pin it so a well-meaning reader does not add it
-# back, and so that if the decision is ever revisited it is a deliberate change
-# to this check rather than a quiet insertion.
+# apply, on the argument that silence would read as "no backup was needed". That
+# was a deliberate change of mind - `--backup` is documented in the command's own
+# help, the recovery path is "re-apply", and `status` names the theme to
+# re-apply - so a line on every run to say nothing happened is noise. Pin it so
+# a well-meaning reader does not add it back, and so that revisiting the decision
+# changes this check rather than inserting a quiet line.
 make_dirty()
 with contextlib.redirect_stdout(io.StringIO()) as no_backup_output:
     code = tdtheme_cli.main(["reset"])
@@ -1072,7 +1057,7 @@ check(installed_state() == STOCK, "the install is back at the baseline to end on
 
 # ---------------------------------------------------------- what apply changed
 #
-# The per-store summary line. Counted against the *installed* file rather than
+# The per-store summary line, counted against the *installed* file rather than
 # the theme's overlay, because the question the line answers is "what did this
 # write do", not "what does the theme contain" - which is `tdtheme diff`.
 #
@@ -1103,9 +1088,9 @@ check(not again[T.TOUCHCOLORS]["changed"] and not again[T.TOUCHOPTIONS]["changed
       f"({len(again[T.TOUCHCOLORS]['changed'])} keys)")
 
 # The direction `diff` does not cover. An overlay may add a key the baseline
-# lacks, and a later theme that does not carry it drops that key - which is the
-# icon-fill leak in another guise, and would be silent if only `diff` were
-# consulted, since the dropped key is absent from the file being compared.
+# lacks, and a later theme that does not carry it drops that key - the icon-fill
+# leak in another guise, and silent if only `diff` were consulted, since the
+# dropped key is absent from the file being compared.
 addskey = T.themes_dir / "addskey"
 addskey.mkdir(parents=True, exist_ok=True)
 (addskey / f"{T.TOUCHCOLORS}.yaml").write_text('zzcustom.thing: ["1", "2", "3"]\n')
@@ -1119,21 +1104,38 @@ check(dropped[T.TOUCHCOLORS]["removed"] == ["zzcustom.thing"],
 check("zzcustom.thing" not in T.load_file(install / T.TOUCHCOLORS),
       "so the removal is visible in the report and not only in the bytes")
 
-# No output. `apply` reports the icons and the ui.tox, and deliberately says
-# nothing about the two stores: a line per store naming changed keys was tried
-# and removed, because "TouchOptions: unchanged" on every run is the same kind
-# of noise as a "backup: none" line. The per-key data is still on the result as
-# `changes`, for a caller that wants it - this just pins that the CLI does not
-# volunteer it.
-with contextlib.redirect_stdout(io.StringIO()) as quiet_output:
+# A count, not a list. The line names the store and how many lines moved and
+# stops there: the largest shipped theme changes 460 keys, so naming them
+# produces a line nobody reads, and `tdtheme diff` is already the listing.
+# Both stores always get a line, so "unchanged" is the answer to "did this theme
+# have an opinion there" rather than silence that reads as a bug.
+with contextlib.redirect_stdout(io.StringIO()) as counted_output:
     code = tdtheme_cli.main(["apply", "recolours"])
-printed = quiet_output.getvalue()
-check(code == 0, "apply still succeeds")
-check(not [ln for ln in printed.splitlines()
-           if T.TOUCHCOLORS in ln or T.TOUCHOPTIONS in ln],
-      f"and prints no line for either store ({printed!r})")
-check("setting(s) changed" not in printed and "unchanged" not in printed,
-      "specifically: neither the per-key count nor the store summary")
+printed = counted_output.getvalue()
+store_lines = {store: [ln.strip() for ln in printed.splitlines() if store in ln]
+               for store in T.STORE_FILES}
+check(code == 0, "apply succeeds")
+check(all(len(v) == 1 for v in store_lines.values()),
+      f"and prints exactly one line per store ({printed!r})")
+check((store_lines[T.TOUCHCOLORS] or [""])[0] == f"{T.TOUCHCOLORS}: 2 changed",
+      f"TouchColors reports how many lines it changed "
+      f"({(store_lines[T.TOUCHCOLORS] or [''])[0]!r})")
+check((store_lines[T.TOUCHOPTIONS] or [""])[0] == f"{T.TOUCHOPTIONS}: 1 changed",
+      f"and TouchOptions the same way ({(store_lines[T.TOUCHOPTIONS] or [''])[0]!r})")
+check(not [k for k in ("tile.connection.hilite1", "worksheet.bg", "CHOP.height")
+           if k in printed],
+      f"but names no keys, only how many ({printed!r})")
+# The count must come off the same pre-apply state the keys do, so re-applying the
+# theme now installed is the case that would expose a comparison run afterwards.
+with contextlib.redirect_stdout(io.StringIO()) as idempotent_output:
+    tdtheme_cli.main(["apply", "recolours"])
+idem = idempotent_output.getvalue()
+reapply_lines = [ln.strip() for store in T.STORE_FILES
+                 for ln in idem.splitlines() if store in ln]
+check(len(reapply_lines) == len(T.STORE_FILES)
+      and all("unchanged" in ln for ln in reapply_lines),
+      f"a re-apply says unchanged for both rather than going quiet ({reapply_lines})")
+
 
 # A store the install does not have cannot be compared against, and calling
 # every one of its keys a change would be a lie about a file that did not exist.
@@ -1149,18 +1151,18 @@ check(installed_state() == STOCK, "and the install is back at the baseline to en
 
 # ------------------------------------------------------------------- ui.tox
 #
-# The UI layout file, and the reason it needs a section of its own: it is the
-# one artefact this tool installs that it cannot read. `ui.tox` is a `.tox` -
+# The UI layout file, and the reason it needs a section of its own: the one
+# artefact this tool installs that it cannot read. `ui.tox` is a `.tox` -
 # TouchDesigner's own binary project format - so there is no parser, no diff,
 # and no way to check that a write did what was wanted. apply copies the bytes
 # and says which file they came from; that is the whole contract, and this suite
 # deliberately asserts nothing about the contents.
 #
 # What is testable is *which* file gets written, because the one hazard here is
-# silent rather than loud. Applying a theme that ships no ui.tox and leaving
-# the previous theme's in place produces an install that looks themed to the
-# wrong theme, and nothing about it is wrong enough to notice. The fallback to
-# `default` is what rules that out, and these checks are what hold it there.
+# silent rather than loud: a theme shipping no ui.tox, applied over the previous
+# theme's, produces an install that looks themed to the wrong theme and nothing
+# about it is wrong enough to notice. The fallback to `default` rules that out,
+# and these checks are what hold it there.
 print()
 print("ui.tox")
 print("-" * 60)
@@ -1175,10 +1177,9 @@ check((PROJECT / "themes" / T.DEFAULT_THEME / T.UI_TOX).read_bytes()
       "default's ui.tox and the baseline copy are the same stock bytes")
 
 # Two themes, and the difference between them is the thing under test. `uitest`
-# holds a ui.tox and nothing else at all, so it is also the only way to see that
+# holds a ui.tox and nothing else, so it is also the only way to see that
 # `list_themes` counts a directory containing nothing but this file. `uibare` is
-# an ordinary overlay theme that ships no ui.tox, which is the case the fallback
-# exists for.
+# an ordinary overlay theme shipping no ui.tox - the case the fallback exists for.
 TOX_BYTES = b"\x00\x01tox-bytes-for-this-theme\x00"
 own_dir = T.themes_dir / "uitest"
 own_dir.mkdir(parents=True, exist_ok=True)
@@ -1219,9 +1220,9 @@ check(install_tox.read_bytes() == default_tox.read_bytes(),
 # No backup for ui.tox, on purpose - see _apply_ui_tox. Pinned because a later
 # reader would otherwise read the omission as an oversight and "fix" it into
 # 1.1 MB per apply, when the outgoing file is already in git in its own theme's
-# folder. Backups are opt-in now, so this has to assert the precondition as
-# well: the absence only means something if an apply really did ask for one and
-# get a set. Otherwise it passes on an empty backups/, which proves nothing.
+# folder. Backups are opt-in now, so this also has to assert the precondition:
+# the absence only means something if an apply really did ask for one and get a
+# set. Otherwise it passes on an empty backups/, which proves nothing.
 tox_result = T.apply("uitest", backup=True)
 check(tox_result["backup"] is not None, "the ui.tox apply did get a backup set")
 check((tox_result["backup"] / T.TOUCHCOLORS).exists(),
@@ -1233,8 +1234,8 @@ check(not list(T.backups_dir.glob(f"*/{T.UI_TOX}"))
       and not list(T.backups_dir.glob(f"*/{T.SYSTEM_DIRNAME}/{T.UI_TOX}")),
       "no apply leaked a ui.tox into backups/ under either path")
 
-# The CLI line. The two cases have to be distinguishable in the output, because
-# they install different dialog geometry and say the same thing otherwise.
+# The CLI line. The two cases have to be distinguishable, because they install
+# different dialog geometry and say the same thing otherwise.
 with contextlib.redirect_stdout(io.StringIO()) as own_output:
     tdtheme_cli.main(["apply", "uitest"])
 with contextlib.redirect_stdout(io.StringIO()) as bare_output:
@@ -1278,9 +1279,9 @@ check(installed_state() == STOCK,
 # `tdtheme` is the entry point anyone actually types, and it is a shell script
 # that has to locate its own cli.py. It gets onto PATH as a symlink, so
 # `dirname $0` is the directory holding the *link*, not the repository - the
-# wrapper has to follow the chain itself. Nothing else in this suite would
-# notice if it stopped: every other check here imports the library directly, and
-# the failure mode is a "can't open file" from a foreign working directory.
+# wrapper has to follow the chain itself. Nothing else here would notice if it
+# stopped: every other check imports the library directly, and the failure mode
+# is a "can't open file" from a foreign working directory.
 WRAPPER = PROJECT / "tdtheme"
 check(WRAPPER.is_file() and os.access(WRAPPER, os.X_OK),
       "the ./tdtheme wrapper exists and is executable")
@@ -1319,14 +1320,14 @@ for name in ("absolute", "relative", "chained"):
           f"the wrapper resolves a {name} symlink to itself "
           f"(exit {result.returncode}: {result.stderr.strip()[:60]})")
 
-# And the real invocation: a bare name found on PATH, with nothing in the
-# command mentioning the repository at all.
+# And the real invocation: a bare name found on PATH, with nothing in the command
+# mentioning the repository at all.
 #
-# The link has to exist under the name the command answers to, *inside* this
-# temp dir. Without it the search falls through to whatever `tdtheme` the
-# machine happens to have installed - so the check passes on a developer box
-# that took the symlink step and fails on a clean checkout, which is the worst
-# order for a test to fail in.
+# The link has to exist under the name the command answers to, *inside* this temp
+# dir. Without it the search falls through to whatever `tdtheme` the machine
+# happens to have installed - so the check passes on a developer box that took
+# the symlink step and fails on a clean checkout, the worst order for a test to
+# fail in.
 (links / "tdtheme").symlink_to("absolute")
 bare = run_wrapper(["tdtheme", "list"], away)
 check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,

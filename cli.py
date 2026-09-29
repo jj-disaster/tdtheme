@@ -23,17 +23,33 @@ def _finding_lines(findings, indent="    ") -> None:
         print(f"{indent}{finding}")
 
 
+def _store_line(store: str, changes: dict) -> str:
+    """How many lines this apply changed in one store, and nothing else.
+
+    A count, never a list of keys. The largest shipped theme changes 460, and a
+    line naming them is a line nobody reads; `tdtheme diff` is the listing.
+    One key is one line in this format, so counting keys counts lines, and the
+    removals are counted too - a key the theme dropped is a line that left the
+    file, which `diff` cannot report because it only looks in `other`.
+    """
+    changed, removed = len(changes["changed"]), len(changes["removed"])
+    if not changed and not removed:
+        return f"{store}: unchanged"
+    if removed:
+        return f"{store}: {changed} changed, {removed} removed"
+    return f"{store}: {changed} changed"
+
+
 def _icon_line(theme: str) -> str:
     """The icon-set summary `list` shows next to each theme.
 
-    Byte-level on purpose. `tdtheme list` runs over every theme, and decoding
-    each 97-icon set to compare pixels costs about 2s for the five shipped
-    themes - too slow for a command whose job is to be glanced at. The byte
-    count is therefore reported, and it is worded as bytes rather than as
-    "changed from baseline", because for a regenerated set the two are very
-    different numbers: `mono` is pure grayscale and leaves 79 of its 97 icons
-    pixel-for-pixel identical, while all 97 differ in bytes. `tdtheme icons
-    diff` is where the pixel count lives.
+    Byte-level on purpose: `list` runs over every theme, and decoding each
+    97-icon set to compare pixels costs about 2s for the five shipped themes -
+    too slow for a command whose job is to be glanced at. So the byte count is
+    reported, and worded as bytes rather than as "changed from baseline",
+    because for a regenerated set the two are very different numbers: `mono` is
+    pure grayscale and leaves 58 of its 97 icons pixel-for-pixel identical while
+    all 97 differ in bytes. `tdtheme icons diff` is where the pixel count lives.
     """
     directory = T.theme_icons_dir(theme)
     if not directory.is_dir():
@@ -147,6 +163,15 @@ def cmd_apply(args) -> int:
     print(f"Applied theme {result['theme']!r}")
     for warning in result["warnings"]:
         print(f"\n    WARNING: {warning}")
+    # Both stores, always. A theme that has no opinion about the option store
+    # should say so rather than go unmentioned, and one line per store is
+    # parallel to the icons and ui.tox lines rather than a change report.
+    for store in T.STORE_FILES:
+        changes = result["changes"].get(store)
+        if changes is None:
+            print(f"    {store}: written (no previous file to compare against)")
+        else:
+            print(f"    {_store_line(store, changes)}")
     icons = result["icons"]
     if icons.get("applied"):
         summary = (f"    icons: {len(icons['written'])} written, "
@@ -160,9 +185,8 @@ def cmd_apply(args) -> int:
         print(f"    icons: {icons['reason']}")
     ui = result["ui_tox"]
     if ui.get("applied"):
-        # The two cases have to be distinguishable, because they install
-        # different dialog geometry and one line of output otherwise says the
-        # same thing for both. The fallback is named as a fallback, not as a
+        # The two cases install different dialog geometry, so one line must not
+        # read the same for both. The fallback is named as a fallback, not as a
         # source, so nobody reads it as this theme shipping a stock file.
         origin = "" if not ui["from_default"] else " (this theme has no ui.tox)"
         print(f"    {T.UI_TOX}: written from {ui['source'].parent.name}{origin}")
@@ -188,9 +212,9 @@ def cmd_apply(args) -> int:
 def cmd_reset(args) -> int:
     """`reset` is `apply default`, for when the theme name is not the point.
 
-    The name is fixed here and everything else is forwarded, so the two
-    commands cannot drift apart: there is one implementation, and the flags
-    on `reset` mean exactly what the same flags mean on `apply`.
+    The name is fixed here and everything else forwarded, so the two commands
+    cannot drift apart: one implementation, and the flags mean what the same
+    flags mean on `apply`.
     """
     args.name = "default"
     return cmd_apply(args)
@@ -219,21 +243,19 @@ def cmd_status(args) -> int:
         state_word = "matches baseline" if count == 0 else f"differs from baseline ({count} key(s))"
         print(f"  {store:<14} {state_word}")
     if state.icon_drift:
-        # The install's own icons, compared to the baseline. This one is
-        # meaningful at byte level: 0 means the shipped files are exactly as
-        # TouchDesigner left them.
+        # The install's own icons. This one is meaningful at byte level: 0 means
+        # the shipped files are exactly as TouchDesigner left them.
         print(f"  {T.ICONS_DIRNAME:<14} {state.icon_count} file(s) in {state.icons_dir}")
         for _key, count in state.icon_drift.items():
             word = ("matches baseline" if count == 0
                     else f"differs from baseline ({count} of {state.icon_count} file(s))")
             print(f"  {'':<14} {word}")
     if state.icon_theme_drift:
-        # Per-theme, byte level, and worded as bytes. Every regenerated icon
-        # differs from the shipped file no matter what the recipe did, so for
-        # `mono` this reads 97 while only 18 icons are actually repainted.
-        # Decoding all five sets to say otherwise costs about 2s, which is the
-        # wrong trade for a status line; `tdtheme icons diff <theme>` gives the
-        # pixel count for one theme.
+        # Per-theme, byte level, worded as bytes. Every regenerated icon differs
+        # from the shipped file no matter what the recipe did, so for `mono` this
+        # reads 97 while only 39 icons are repainted. Decoding all five sets to
+        # say otherwise costs about 2s, the wrong trade for a status line;
+        # `tdtheme icons diff <theme>` gives one theme's pixel count.
         print("\n  themed icon sets (bytes; `icons diff` compares pixels):")
         for name, count in state.icon_theme_drift.items():
             word = "stock bytes" if count == 0 else f"{count} file(s) differ in bytes"
@@ -256,9 +278,8 @@ def cmd_icons(args) -> int:
     if args.icons_command == "preview":
         return _icons_preview(args)
     raise AssertionError(f"unhandled icons subcommand {args.icons_command!r}")
-    # `icons` uses subparsers(required=True), so exactly one of the branches
-    # above always returns and this is unreachable. It stays as a guard against
-    # a future subcommand being added without a dispatch branch.
+    # `icons` uses subparsers(required=True), so a branch above always returns:
+    # a guard against adding a subcommand without one.
 
 
 def _icons_list(args) -> int:
@@ -278,9 +299,8 @@ def _icons_list(args) -> int:
 
 
 def _icons_diff(args) -> int:
-    # `name` is a required positional here, so it is always set. A theme with
-    # no Icons/ is a real state, and indistinguishable from a typo unless the
-    # name is checked first.
+    # `name` is a required positional, so always set. A theme with no Icons/ is a
+    # real state, indistinguishable from a typo unless the name is checked first.
     T.require_theme(args.name)
     directory = T.theme_icons_dir(args.name)
     if not directory.is_dir():
@@ -300,13 +320,12 @@ def _icons_diff(args) -> int:
             print("    (this theme ships the stock icons byte for byte)")
         return EXIT_OK
 
-    # Bytes and pixels disagree here, and only pixels answer the question
-    # anyone is really asking. An authored icon always differs from the shipped
-    # file - it is single-strip, re-compressed, and has the ~5 KB of Photoshop
-    # metadata stripped - so the byte count is 97 for every themed icon set,
-    # including `mono`, where a grayscale recipe leaves 58 of the 97
-    # pixel-for-pixel identical. Reporting only the byte count would make every
-    # recipe look equally aggressive.
+    # Bytes and pixels disagree here, and only pixels answer the question anyone
+    # is really asking. An authored icon always differs from the shipped file -
+    # single-strip, re-compressed, with the ~5 KB of Photoshop metadata stripped
+    # - so the byte count is 97 for every themed set, including `mono`, where a
+    # grayscale recipe leaves 58 of the 97 pixel-for-pixel identical. Reporting
+    # only bytes would make every recipe look equally aggressive.
     pixel_changes = tdicons.pixel_diff(T.baseline_icons_dir(), directory)
     kinds: dict[str, list[str]] = {}
     for name, state in pixel_changes.items():
@@ -404,7 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "off by default because re-applying a theme restores them")
     p.set_defaults(func=cmd_reset)
 
-    icons = sub.add_parser("icons", help="inspect and rebuild icon sets")
+    icons = sub.add_parser("icons", help="inspect icon sets")
     icons_sub = icons.add_subparsers(dest="icons_command", required=True)
 
     p = icons_sub.add_parser("list", help="list an icon set with sizes and hashes")
