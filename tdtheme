@@ -16,4 +16,31 @@ while [ -L "$target" ]; do
     esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
-exec python3 "$here/cli.py" "$@"
+
+# Pick an interpreter. `python3` from PATH is the right answer when it works, and
+# on a Mac without the Command Line Tools `/usr/bin/python3` is only a 118 KB stub
+# that opens a GUI installer instead of running anything - so "it exists on PATH"
+# is not the same question as "it runs".
+#
+# The fallback is TouchDesigner's own bundled interpreter. Using this tool at all
+# means TouchDesigner is installed, and it always ships a full CPython with PyYAML
+# alongside, so this is a dependency the user already has rather than a new one.
+# Checked explicitly and first-listed after python3 so a working PATH still wins.
+py=python3
+if ! command -v "$py" >/dev/null 2>&1; then
+    for candidate in \
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+    do
+        if [ -x "$candidate" ]; then
+            py=$candidate
+            break
+        fi
+    done
+fi
+if ! command -v "$py" >/dev/null 2>&1; then
+    echo "tdtheme: no python3 found on PATH, and no TouchDesigner interpreter" >&2
+    echo "tdtheme: install the Command Line Tools with 'xcode-select --install'," >&2
+    echo "tdtheme: or install TouchDesigner, then try again." >&2
+    exit 127
+fi
+exec "$py" "$here/cli.py" "$@"
