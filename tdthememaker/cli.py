@@ -8,11 +8,11 @@
     python3 cli.py preview midnight
     python3 cli.py export mytheme
 
-`build` writes into the target theme's `Icons/` directory by default, which is
-where `tdtheme apply` reads from. It refuses to overwrite an existing set
-without `--force`, because a recipe cannot always reproduce what is already
-there: `defaultnowarn` has an empty recipe and one hand-placed icon, so
-rebuilding it would silently put the stock warning face back.
+`build` writes into the target theme's `Icons/` directory by default, where
+`tdtheme apply` reads from, and refuses to overwrite an existing set without
+`--force` - a recipe cannot always reproduce what is already there:
+`defaultnowarn` has an empty recipe and one hand-placed icon, so rebuilding it
+would silently put the stock warning face back.
 
 `export` goes the other way, recording the live install as a new theme. To
 install a finished theme, use tdtheme.
@@ -50,7 +50,7 @@ def _themes_with_recipes() -> list[str]:
 
 
 def _bar(done: int, total: int, name: str) -> None:
-    # Only draw to a terminal. Carriage returns are correct on a tty and
+    # Only draw to a terminal: carriage returns are correct on a tty and
     # unreadable in a pipe, where 97 updates become one enormous line.
     if not sys.stdout.isatty():
         return
@@ -82,9 +82,9 @@ def cmd_list(args) -> int:
 def _classify(delta: dict, installed: list[str]) -> tuple[list, list, list, list]:
     """Split a `pixel_diff` result into the four things a caller cares about.
 
-    `pixel_diff` only reports files that differ in *bytes*, then says whether
-    the pixels moved. So "absent from the result" means byte-identical, and
-    "identical" means re-encoded but visually the same. Only `changed` and the
+    `pixel_diff` reports only files that differ in *bytes*, then says whether
+    the pixels moved. So "absent from the result" means byte-identical and
+    "identical" means re-encoded but visually the same; only `changed` and the
     structural states are real changes.
     """
     changed = [n for n, v in delta.items() if v == "changed"]
@@ -118,12 +118,11 @@ def cmd_build(args) -> int:
                 print(f"    {target} is empty or absent, so nothing would be lost")
                 return EXIT_OK
             # `pixel_diff` reports only the files that differ in bytes, so an
-            # installed icon the recipe reproduces exactly is simply absent
-            # from it. Absence is the good case; the denominator has to be the
-            # installed count, not the length of the delta.
-            # Decoded once and reused: it reads and decodes every TIFF in both
-            # directories, so calling it inside the loop below re-did the whole
-            # set once per icon that changed.
+            # installed icon the recipe reproduces exactly is simply absent from
+            # it. Absence is the good case; the denominator has to be the
+            # installed count, not the length of the delta. Decoded once and
+            # reused: it reads and decodes every TIFF in both directories, so
+            # calling it inside the loop re-did the whole set once per change.
             delta = F.pixel_diff(target, Path(scratch))
             changed, structural, broken, reencoded = _classify(delta, installed)
             lost = changed + structural

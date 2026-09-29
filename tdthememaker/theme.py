@@ -1,29 +1,25 @@
 """Author a theme from what is currently installed.
 
-`tdtheme` installs themes. This is the other direction: take the live
-TouchDesigner configuration and write it out as a new theme directory, so it
-can be edited, reviewed, and sent to someone else.
+`tdtheme` installs themes; this is the other direction - take the live
+TouchDesigner configuration and write it out as a new theme directory, so it can
+be edited, reviewed, and sent to someone else.
 
-Two things are recorded, and they are recorded differently on purpose:
+Two things are recorded, and differently on purpose. The **colour stores** become
+a *sparse* overlay - only the keys that differ from the baseline, in restricted
+YAML that is a valid subset of the real format, which is what makes the result
+reviewable in a diff and editable by hand. The **icons** are copied byte for byte:
+re-encoding them would make it impossible to tell later whether the install changed
+or this tool's codec did, and a TIFF is not reviewable anyway.
 
-- **The colour stores** become a *sparse* overlay - only the keys that differ
-  from the baseline, in restricted YAML that is a valid subset of the real
-  format. That is what makes the result reviewable in a diff and editable by
-  hand.
-- **The icons** are copied byte for byte. Re-encoding them would make it
-  impossible to tell later whether the install changed or this tool's codec
-  did, and a TIFF is not reviewable anyway.
-
-The consequence is that an exported theme is reproducible only as bytes. If
-the icons were made by a recipe, keep that recipe; if they were placed by hand,
-no recipe can describe them, and rebuilding from one would quietly revert them.
-`build --check` is how you find out which case you are in.
-
-The store layer - the restricted YAML parser, the sparse differ, the field
-integrity rules - belongs to `tdtheme` and is imported rather than copied, so
-there is exactly one implementation of the `TouchColors` format. That matters
-more here than anywhere else: this module *writes* that format, so a second
-implementation would mean themes this tool produces that `tdtheme` cannot read.
+The consequence is that an exported theme is reproducible only as bytes. If the
+icons were made by a recipe, keep that recipe; if they were placed by hand, no
+recipe can describe them, and rebuilding from one would quietly revert them.
+`build --check` is how you find out which case you are in. The store layer - the
+restricted YAML parser, the sparse differ, the field integrity rules - belongs to
+`tdtheme` and is imported rather than copied, so there is exactly one
+implementation of the `TouchColors` format. That matters more here than anywhere
+else: this module *writes* that format, so a second implementation would mean
+themes this tool produces that `tdtheme` cannot read.
 """
 
 from __future__ import annotations
@@ -58,10 +54,9 @@ class ExportError(Exception):
 def dump_overlay(data: "OrderedDict[str, list[str]]", name: str = "") -> str:
     """Render a sparse overlay as restricted YAML.
 
-    An overlay describes key overrides, not a file image, so the empty key
-    (a blank line) is skipped rather than emitted as invalid YAML. Blank lines
-    present in the baseline survive `apply` because merging starts from the
-    baseline.
+    An overlay describes key overrides, not a file image, so the empty key (a
+    blank line) is skipped rather than emitted as invalid YAML. Blank lines in
+    the baseline survive `apply` because merging starts from the baseline.
     """
     out = ["# tdtheme sparse overlay - only keys that differ from baseline.",
            f"# file: {name}" if name else "# file:",

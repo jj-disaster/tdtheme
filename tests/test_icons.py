@@ -1,20 +1,20 @@
 """Tests for installing icon sets: reading, validating, comparing, applying.
 
-This is the half of the icon layer that stayed in `tdtheme`. It covers reading
-a theme's icons, checking they are complete and sound, reporting what a theme
-actually changes, and installing a set into a config directory. Writing icons
-is not tested here because this tool no longer does it - the writer, the ops
-and the recipe engine live in `tdthememaker/`, with their own suite.
+This is the half of the icon layer that stayed in `tdtheme`: reading a theme's
+icons, checking they are complete and sound, reporting what a theme actually
+changes, and installing a set into a config directory. Writing is not tested
+here because this tool no longer does it - the writer, the ops and the recipe
+engine live in `tdthememaker/`, with their own suite.
 
 The icon work is the one part of this tool that writes binary files into an
-application bundle, so the assertions here are mostly about the ways that can go
-quietly wrong: a file that decodes in this tool but not in TouchDesigner, a
-glyph whose alpha or size moved, or a theme that leaves a stale icon behind
-because its directory was incomplete.
+application bundle, so the assertions are mostly about how that can go quietly
+wrong: a file that decodes in this tool but not in TouchDesigner, a glyph whose
+alpha or size moved, or a theme that leaves a stale icon behind because its
+directory was incomplete.
 
 Everything runs against a throwaway config selected via TDTHEME_CONFIG, seeded
 from the project's pristine `baseline/`. The real TouchDesigner install is only
-read, and only to confirm the baseline still matches it.
+read, and only to report which theme it currently holds.
 
 Run:  python3 tests/test_icons.py
 """
@@ -85,8 +85,8 @@ T.baseline_dir = tmp / "baseline"
 T.themes_dir = tmp / "themes"
 T.backups_dir = tmp / "backups"
 
-# The baseline and the themes are copied in as well, not just pointed at. Every
-# check below then goes through the real module API - capture, apply, export,
+# The baseline and the themes are copied in as well, not just pointed at, so
+# every check below goes through the real module API - capture, apply, export,
 # icon_diff, validate_icons, preview_icons - against a faithful private copy,
 # and a test that writes a broken theme or corrupts an icon touches only the
 # temp tree.
@@ -114,14 +114,13 @@ check(len(names) == 97, f"baseline holds the 97 shipped icons (found {len(names)
 # stale baseline would break, and it holds whatever is currently applied.
 #
 # "The same glyphs" is a subset relation, not equality. A theme is allowed to
-# ship fewer icons than the baseline: `apply` completes the rest from the
-# baseline, and a theme that themes one glyph and leaves 96 stock is a
-# perfectly good theme. This asserted equality until it failed on exactly that
-# - a real theme shipping 1 of 97 - which is a check that had outlived the
-# feature it was written for. What has to hold is that every name a theme
-# ships is one the baseline knows, because that is what the fill-in resolves
-# against; a name the baseline lacks is installed as-is and reported
-# separately, and is not an error either.
+# ship fewer icons: `apply` completes the rest from the baseline, and a theme
+# that themes one glyph and leaves 96 stock is a perfectly good theme. This
+# asserted equality until it failed on exactly that - a real theme shipping 1 of
+# 97 - a check that had outlived the feature it was written for. What has to hold
+# is that every name a theme ships is one the baseline knows, because that is
+# what the fill-in resolves against; a name the baseline lacks is installed
+# as-is and reported separately, and is not an error either.
 installed_names = set(tdicons.icon_names(BASE))
 check(len(installed_names) == 97, "the baseline's 97 icon names are all distinct")
 partial_themes = []
@@ -135,9 +134,6 @@ for theme in sorted(T.list_themes()):
           f"(unknown: {sorted(theme_names - installed_names)})")
     if theme_names != installed_names:
         partial_themes.append(f"{theme} {len(theme_names)}/{len(installed_names)}")
-# A note, not a check. Which themes are partial is a fact about the repository,
-# not a property with a correct value, and asserting it would make a new theme
-# fail for shipping fewer icons - the thing this section used to do.
 if partial_themes:
     print(f"[  note  ] {len(partial_themes)} theme(s) ship a partial icon set, "
           f"completed from the baseline at apply time: {', '.join(partial_themes)}")
@@ -162,13 +158,12 @@ check(not resized,
 for item in resized[:5]:
     print(f"        {item}")
 
-# Report which theme the real install currently holds. This used to be a hard
-# check that the install matched the baseline byte for byte, which was wrong:
-# it read the live install through T.TD_CONFIG, a hardcoded constant that
-# ignores TDTHEME_CONFIG, so it also leaked out of this suite's isolation. And
-# it failed the moment anyone applied a theme - treating normal, correct use of
-# the tool as a broken baseline. Knowing *which* theme is applied is worth
-# printing; asserting the install is unthemed is not.
+# Which theme the real install holds is worth reporting. This used to be a hard
+# check that the install matched the baseline byte for byte, which was wrong
+# twice over: it read the live install through T.TD_CONFIG, a hardcoded constant
+# that ignores TDTHEME_CONFIG, so it also leaked out of this suite's isolation;
+# and it failed the moment anyone applied a theme, treating normal, correct use
+# of the tool as a broken baseline. Asserting the install is unthemed is not.
 live = Path("/Applications/TouchDesigner.app/Contents/Resources/tfs/Config") / T.ICONS_DIRNAME
 if live.is_dir():
     held = "the baseline (stock)"
@@ -191,9 +186,9 @@ else:
 # makes it a real check: everything above uses this tool's own parser, so a
 # systematic misreading of the format would pass all of it.
 #
-# Only reading is checked here. Converting forces a real decode rather than a
-# header parse, because a broken strip still reports a correct width - that is
-# how a multi-strip bug stays invisible to a "can it open this" check.
+# Only reading is checked. Converting forces a real decode rather than a header
+# parse, because a broken strip still reports a correct width - that is how a
+# multi-strip bug stays invisible to a "can it open this" check.
 
 section("Independent decode (sips)")
 
@@ -249,7 +244,7 @@ for theme in THEMES:
           f"{theme}: validate_icons reports no errors "
           f"({[f.name for f in findings if f.severity == 'error'][:2]})")
     # A stale generated set is the failure this catches: a theme whose icons
-    # were built from an older baseline keeps working, just wrongly.
+    # came from an older baseline keeps working, just wrongly.
     if theme != "default":
         d = T.icon_diff(theme)
         check(len(d) == len(names),
@@ -299,7 +294,7 @@ section("Apply (temp install)")
 
 # Everything so far was pure computation. This is the part that has to work on
 # a real install: swap the icons in, put them back, and leave a backup - the
-# last one only because this apply asks for it, which is the only way to get one.
+# last only because this apply asks for it, the only way to get one.
 live_icons = install / T.ICONS_DIRNAME
 check(live_icons.is_dir() and len(tdicons.icon_names(live_icons)) == len(names),
       f"temp install seeded with all {len(names)} icons")
@@ -418,10 +413,10 @@ check(EXTRA not in result["icons"]["filled"],
       "and is not reported as filled in, because it came from the theme")
 (THEMED / T.ICONS_DIRNAME / EXTRA).unlink()
 # Nothing in the tool ever deletes an installed icon, so the next apply - and
-# this one - has to do it. That is deliberate rather than an oversight: the
-# baseline is a capture of one build, and a theme carrying a name this build
-# does not have would be pruned away by a later `apply default` if apply
-# deleted the unknown. The install is a live directory, not a reconstruction.
+# this one - has to do it. Deliberate rather than an oversight: the baseline is
+# a capture of one build, and a name the baseline does not know is installed
+# as-is, so a later `apply default` would prune it away if apply deleted the
+# unknown. The install is a live directory, not a reconstruction.
 (live_icons / EXTRA).unlink()
 
 # A complete theme must be entirely unaffected by the fill-in path: nothing
@@ -495,10 +490,10 @@ check(base_sheet.read_bytes() != sheet.read_bytes(),
 
 section("Missing theme vs. missing icon directory")
 
-# These are two different situations that used to look identical, because
-# `preview_icons` fell back to the baseline for any directory it could not
-# find. The visible symptom was a contact sheet of the *baseline* written to
-# `nosuchtheme-icons.png` - a filename asserting something the pixels did not.
+# Two situations that used to look identical, because `preview_icons` fell back
+# to the baseline for any directory it could not find. The visible symptom was a
+# contact sheet of the *baseline* written to `nosuchtheme-icons.png` - a filename
+# asserting something the pixels did not.
 try:
     T.preview_icons("nosuchtheme", tmp / "typo.png")
 except T.ThemeNotFound as exc:

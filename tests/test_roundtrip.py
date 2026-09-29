@@ -1,8 +1,8 @@
 """Acceptance gate: a parsed file must serialise back to identical bytes.
 
-This is the load-bearing invariant of the whole tool. If parse/serialize is
-not byte-exact, `apply` would silently rewrite parts of TouchDesigner's files
-that the user never asked to change.
+The load-bearing invariant of the whole tool: if parse/serialize is not
+byte-exact, `apply` silently rewrites parts of TouchDesigner's files the user
+never asked to change.
 
 Run:  python3 tests/test_roundtrip.py
 """
@@ -47,11 +47,10 @@ def roundtrip(raw: bytes, name: str) -> None:
 print("TouchDesigner stores")
 print("-" * 60)
 
-# Round-trip both the installed files and the pristine baseline when available.
-# The installed copy is the one that actually has to survive a real apply; the
-# baseline is the reference every theme diffs against. Testing both means a
-# corrupt install is caught without making the result depend on which theme
-# happens to be applied right now.
+# Both the installed files and the pristine baseline, when available: the
+# installed copy is the one that has to survive a real apply, and testing the
+# baseline too catches a corrupt install without making the result depend on
+# which theme happens to be applied right now.
 PROJECT = Path(__file__).resolve().parent.parent
 BASELINE = PROJECT / "baseline"
 
@@ -90,7 +89,7 @@ for label, raw, expected_trailing in cases:
     parsed = TdFile.parse(raw, "TouchColors")
     check(parsed.to_bytes() == raw, f"edge: {label}")
 
-# Terminator and trailing-newline must be carried through, not hard-coded.
+# The terminator and trailing-newline state are carried through, not hard-coded.
 lf = TdFile.parse(b"a.b\t1\t0\t0\nb.c\t0\t1\t0\n", "TouchColors")
 check(lf.terminator == "\n", "edge: bare-LF terminator detected")
 check(lf.to_bytes() == b"a.b\t1\t0\t0\nb.c\t0\t1\t0\n",
@@ -102,10 +101,9 @@ check(nt.to_bytes() == b"a.b\t1\t0\t0", "edge: no trailing newline is not added"
 
 # The two real oddities must survive, not just round-trip.
 #
-# Stated against the *baseline*, not the live install. These are claims about
-# what the vendor ships, and a theme is allowed to change any of them - reading
-# the install here would make applying midnight fail the gate for changing
-# nothing this test cares about.
+# Stated against the *baseline*, not the live install: these are claims about
+# what the vendor ships, and a theme is allowed to change any of them, so
+# reading the install would fail this gate for changing nothing it cares about.
 colors_path = BASELINE / TOUCHCOLORS
 check(colors_path.exists(), "baseline TouchColors present")
 if colors_path.exists():

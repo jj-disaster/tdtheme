@@ -1,24 +1,20 @@
 """The TIFF layer both halves of this project share.
 
-`tdtheme` installs and inspects; `tdthememaker` authors and exports. Both have
-to read a TIFF forensically - TouchDesigner ships LZW-compressed, RGBA,
-non-interleaved files whose `ExtraSamples` tag lies about the alpha convention
-in 23 of the 97 icons - and both have to render a set to a PNG to show a human
-what changed. That was 523 byte-identical lines living twice, once in
-`tdicons.py` and once in `tdthememaker/icons.py`, free to drift apart: a fix
-landed in one copy and the other kept the bug.
+`tdtheme` installs and inspects; `tdthememaker` authors and exports. Both read a
+TIFF forensically - TouchDesigner ships LZW-compressed, RGBA, non-interleaved
+files whose `ExtraSamples` tag lies about the alpha convention in 23 of the 97
+icons - and both render a set to a PNG to show a human what changed. That was
+523 byte-identical lines living twice, in `tdicons.py` and
+`tdthememaker/icons.py`, free to drift apart: a fix landed in one copy and the
+other kept the bug.
 
-This module is the single copy. It sits at the repository root rather than
-inside either half because it is the leaf of the import graph - it imports
-nothing from this project - so neither half has to import the other to reach
-it. `tdthememaker` writing a TIFF also needs to read one, and routing that
-through `tdtheme` would invert the dependency.
-
-Writing is not here. `write_tiff` and `lzw_encode` exist only to author, and
-they stay in `tdthememaker`.
-
-Both modules re-export every name below, so `tdicons.read_tiff` and
-`tdthememaker.icons.read_tiff` keep working.
+This is the single copy, at the repository root rather than inside either half
+because it is the leaf of the import graph - it imports nothing from this project
+- so neither half has to import the other to reach it. `tdthememaker` writing a
+TIFF also needs to read one, and routing that through `tdtheme` would invert the
+dependency. Writing is not here: `write_tiff` and `lzw_encode` exist only to author
+and stay in `tdthememaker`. Both modules re-export every name below, so
+`tdicons.read_tiff` and `tdthememaker.icons.read_tiff` keep working.
 """
 
 from __future__ import annotations
@@ -77,9 +73,9 @@ PHOTOMETRIC_RGB = 2
 #: Alpha handling. A TIFF with an alpha channel may declare it as "associated"
 #: (premultiplied) or "unassociated" (straight). TouchDesigner's own files
 #: declare ExtraSamples=1, i.e. *associated*, so the stored RGB is already
-#: multiplied by alpha. The transforms below are written against straight
-#: alpha and un-premultiply on the way in, so recolouring an icon cannot
-#: brighten its own transparent pixels.
+#: multiplied by alpha. The transforms below assume straight alpha and
+#: un-premultiply on the way in, so recolouring cannot brighten its own
+#: transparent pixels.
 EXTRA_SAMPLES_UNSPECIFIED = 0
 
 EXTRA_SAMPLES_ASSOCIATED = 1
@@ -102,26 +98,21 @@ _MAX_BITS = 12
 def lzw_decode(data: bytes) -> bytes:
     """Decode one TIFF LZW strip (MSB-first).
 
-    The one genuinely tricky detail is the code-width growth, and getting it
-    wrong is silent: the stream desynchronises and you get plausible-looking
-    garbage rather than an error. The rule is that the decoder's table is
-    always *one entry behind* the encoder's, because the encoder adds a phrase
-    when it emits a code while the decoder only learns that phrase when it
-    reads the following code. So the encoder grows the width when the next
-    code to assign exceeds the maximum, and the decoder grows it one code
-    earlier:
+    The one genuinely tricky detail is code-width growth, and getting it wrong is
+    silent: the stream desynchronises into plausible-looking garbage rather than
+    an error. The decoder's table is always *one entry behind* the encoder's,
+    because the encoder adds a phrase when it emits a code while the decoder only
+    learns it on the following code. So the encoder widens when the next code to
+    assign exceeds the maximum, and the decoder one code earlier:
 
         encoder:  next_code >  max_code   ->  widen
         decoder:  len(table) >= max_code  ->  widen
 
-    Both were measured, not recalled: with the decoder using `>` to match the
-    encoder, 43 of the 89 LZW strips shipped in the install decode to the
-    right length and 46 do not. With `>=`, all 89 do. See
-    `tests/test_icons.py`, which asserts this against the real files so the
-    constant cannot be "tidied" back into a broken state.
-
-    Validated by decoding all 89 LZW strips TouchDesigner ships and checking
-    the output length equals width*height*samples exactly.
+    Measured, not recalled: with the decoder using `>` to match the encoder, 43 of
+    the 89 LZW strips shipped in the install decode to the right length and 46 do
+    not; with `>=`, all 89 do, each at exactly width*height*samples.
+    `tests/test_icons.py` asserts this against the real files so the constant
+    cannot be "tidied" back into a broken state.
     """
     out = bytearray()
     table: "list[bytes]" = []
@@ -234,16 +225,13 @@ def _first_ints(entries: dict, tag: int, default: int) -> list:
 def describe_tiff(raw: bytes) -> "dict[str, int | str]":
     """Structural facts about a TIFF, without decoding any pixels.
 
-    `read_tiff` normalises everything to straight-alpha RGBA and hands back a
-    `TiffImage` that no longer records how the file was actually stored, so the
-    shape of the *shipped* set - how many files are multi-strip, how many are
-    RGB rather than RGBA, what compression they use - is invisible through it.
-    That shape is worth knowing: multi-strip and premultiplied-alpha are both
-    cases a straightforward reader gets wrong, and a theming tool that silently
-    mishandles them corrupts glyphs rather than failing. The manifest records
-    these so the claim can be checked instead of asserted in prose.
-
-    Cheap: parses the header and IFD, touches no strip data.
+    `read_tiff` normalises everything to straight-alpha RGBA and returns a
+    `TiffImage` that no longer records how the file was stored, so the shape of the
+    *shipped* set - multi-strip, RGB rather than RGBA, compression - is invisible
+    through it. Worth knowing: multi-strip and premultiplied alpha are both cases a
+    straightforward reader gets wrong, and silently mishandling them corrupts
+    glyphs rather than failing. The manifest records these so the claim can be
+    checked instead of asserted in prose. Cheap: header and IFD only, no strip data.
     """
     if len(raw) < 8:
         raise IconError("file is too short to be a TIFF")
@@ -294,10 +282,10 @@ def describe_tiff(raw: bytes) -> "dict[str, int | str]":
 def read_tiff(raw: bytes) -> TiffImage:
     """Decode a TIFF into a straight-alpha RGBA `TiffImage`.
 
-    Handles exactly what TouchDesigner ships: little-endian classic TIFF,
-    single page, 8 bits per sample, photometric RGB, one strip, LZW or no
-    compression, 3 or 4 samples. Anything else raises rather than guessing -
-    a silently mis-decoded icon is worse than a loud failure.
+    Handles what TouchDesigner ships: little-endian classic TIFF, single page,
+    8 bits per sample, photometric RGB, LZW or no compression, 3 or 4 samples.
+    Anything else raises rather than guessing - a silently mis-decoded icon is
+    worse than a loud failure.
     """
     if len(raw) < 8:
         raise IconError("file is too short to be a TIFF")
@@ -349,11 +337,10 @@ def read_tiff(raw: bytes) -> TiffImage:
         raise IconError(f"{len(offsets)} strip offsets but {len(counts)} byte counts")
 
     # Multi-strip is real, not hypothetical: five of the 97 shipped icons are
-    # 256x256 with a RowsPerStrip of 16 or 64, so they arrive as 4 or 16
-    # separate strips. Each strip is an independent LZW stream - the encoder
-    # emits a Clear code at the head of each - so the obvious implementation
-    # of concatenating the compressed strips and decoding once desynchronises
-    # and yields garbage. Decode strip by strip.
+    # 256x256 with a RowsPerStrip of 16 or 64, so they arrive as 4 or 16 separate
+    # strips. Each is an independent LZW stream - the encoder emits a Clear code at
+    # the head of each - so concatenating the compressed strips and decoding once
+    # desynchronises into garbage. Decode strip by strip.
     chunks = []
     for start, length in zip(offsets, counts):
         strip = raw[start:start + length]
@@ -372,16 +359,14 @@ def read_tiff(raw: bytes) -> TiffImage:
     extra = _first_ints(entries, TAG_EXTRA_SAMPLES, [EXTRA_SAMPLES_UNSPECIFIED])
     declared = extra[0] if extra else EXTRA_SAMPLES_UNSPECIFIED
 
-    # Decide the alpha convention from the DATA, not from the tag. The tag is
-    # metadata about intent; the samples are the image, and for 23 of the 97
-    # shipped icons the two disagree. A single pixel with max(RGB) > alpha
-    # proves the tag is lying, since no channel can exceed alpha in genuinely
-    # premultiplied data - so the two populations separate with no threshold
-    # beyond "any". Trusting the tag instead is what turned those 23 icons'
-    # soft edges into solid white, destroying the antialiasing ramp entirely.
-    #
-    # ../docs/reverse-engineering.md §5 has the derivation and the per-file
-    # pixel counts behind this.
+    # Decide the alpha convention from the DATA, not the tag. The tag is metadata
+    # about intent; the samples are the image, and for 23 of the 97 shipped icons
+    # the two disagree. One pixel with max(RGB) > alpha proves the tag is lying,
+    # since no channel can exceed alpha in genuinely premultiplied data - so the
+    # two populations separate with no threshold beyond "any". Trusting the tag
+    # turned those 23 icons' soft edges into solid white, destroying the
+    # antialiasing ramp entirely.
+    # ../docs/reverse-engineering.md §5 has the derivation and per-file counts.
     raw = data
     partial = 0
     violating = 0
@@ -430,13 +415,12 @@ def read_tiff(raw: bytes) -> TiffImage:
 def _looks_premultiplied(data: bytes, width: int, height: int, samples: int) -> bool:
     """True if `data` holds premultiplied samples, judged by its own content.
 
-    A premultiplied image has a flat, characteristic profile: bright interiors
-    sitting at or just under alpha=255, with dimmer fringes. A straight image
-    of the same artwork keeps full-strength colour in its antialiased pixels,
-    so a large majority of its partial-alpha pixels have a channel above alpha.
-    Counting that majority separates the two populations with a wide margin
-    (the 68 real cases sit at 0%, the 23 mislabeled ones at 96%+), which makes
-    the threshold unimportant - it only has to not be near either population.
+    A premultiplied image has a flat profile: bright interiors at or just under
+    alpha=255 with dimmer fringes. A straight image of the same artwork keeps
+    full-strength colour in its antialiased pixels, so most of its partial-alpha
+    pixels have a channel above alpha. Counting that majority separates the two
+    with a wide margin - the 68 real cases sit at 0%, the 23 mislabeled ones at
+    96%+ - so the threshold only has to be nowhere near either population.
     """
     if samples != 4:
         return False
@@ -461,10 +445,9 @@ def _png_chunk(tag: bytes, payload: bytes) -> bytes:
 def png_bytes(image: TiffImage) -> bytes:
     """Encode a `TiffImage` as an RGBA PNG. Used for previews only.
 
-    `zlib` is in the standard library, so this costs nothing in dependency
-    terms, and being able to *look* at a generated icon set is the difference
-    between a prototype that can be checked and one that has to be taken on
-    faith.
+    `zlib` is in the standard library, so this costs nothing in dependency terms,
+    and being able to *look* at a generated set is the difference between a
+    prototype that can be checked and one taken on faith.
     """
     raw = bytearray()
     stride = image.width * 4
@@ -480,10 +463,10 @@ def png_bytes(image: TiffImage) -> bytes:
 def contact_sheet(images: "list[tuple[str, TiffImage]]", *, columns: int = 10,
                   cell: int = 72, background: "tuple[int,int,int,int]" = (28, 28, 32, 255),
                   label_height: int = 0) -> TiffImage:
-    """Tile images into one RGBA sheet on a solid background.
+    """Tile images into one RGBA sheet on a solid background, nearest-neighbour.
 
-    Nearest-neighbour, no filtering: these are 16-256 px UI glyphs being
-    inspected for legibility, and any smoothing would misrepresent them.
+    No filtering: these are 16-256 px UI glyphs being inspected for legibility,
+    and any smoothing would misrepresent them.
     """
     rows = (len(images) + columns - 1) // columns
     width = columns * cell
@@ -536,12 +519,12 @@ def _atomic_write(path, data: bytes) -> None:
 def icon_manifest(directory) -> "dict[str, dict]":
     """{name: {sha256, width, height, bytes, ...}} for a directory of icons.
 
-    Used to answer "how does this theme's icon set differ from the baseline"
-    without decoding any pixels, and to notice an icon that has gone missing.
-    The storage fields come from `describe_tiff` and are recorded because a
-    regenerated set is deliberately *not* shaped like the shipped one - one
-    strip, always RGBA, no Photoshop metadata - so a diff between the two is
-    only meaningful over the pixel data, and a reader needs to see why.
+    Answers "how does this theme's icon set differ from the baseline" without
+    decoding pixels, and notices an icon that has gone missing. The storage fields
+    come from `describe_tiff` and are recorded because a regenerated set is
+    deliberately *not* shaped like the shipped one - one strip, always RGBA, no
+    Photoshop metadata - so a diff between the two is only meaningful over pixel
+    data, and a reader needs to see why.
     """
     directory = Path(directory)
     manifest: "dict[str, dict]" = {}
@@ -562,14 +545,13 @@ def icon_manifest(directory) -> "dict[str, dict]":
 def capture_icons(source, destination) -> "dict[str, Path]":
     """Copy an install's icon directory into `destination`, verbatim.
 
-    Verbatim on purpose. When this is used to author a theme, the icons are
-    whatever the user has installed, and re-encoding them would make it
-    impossible to tell later whether the install changed or this tool's codec
-    did. The same argument applies to a baseline.
-
-    This is also why a recipe cannot always reproduce an exported set: an edit
-    made by hand, or by any tool other than this one, leaves no trace in a
-    recipe. See the `defaultnowarn` case in the README.
+    Verbatim on purpose: these icons are whatever the user has installed, and
+    re-encoding them would make it impossible to tell later whether the install
+    changed or this tool's codec did. Same argument for a baseline, and also why
+    a recipe cannot always reproduce an exported set: a hand edit, or one by any
+    tool other than this one, leaves no trace in a recipe. See the
+    `defaultnowarn` case in `tdthememaker/README.md` and
+    `docs/reverse-engineering.md`.
     """
     source = Path(source)
     destination = Path(destination)
@@ -587,10 +569,9 @@ def capture_icons(source, destination) -> "dict[str, Path]":
 def diff_icons(baseline, other) -> "dict[str, str]":
     """Names whose bytes differ between two icon directories.
 
-    Present in `other` but not `baseline` is reported as ``"added"``; present
-    in `baseline` but not `other` as ``"absent"``. The distinction matters: a
-    TouchDesigner update that adds an icon must not read as "this theme deleted
-    it".
+    Present in `other` but not `baseline` is ``"added"``, present in `baseline`
+    but not `other` is ``"absent"``. The distinction matters: a TouchDesigner
+    update that adds an icon must not read as "this theme deleted it".
     """
     base = {name: hashlib.sha256((Path(baseline) / name).read_bytes()).hexdigest()
             for name in icon_names(baseline)}
@@ -609,19 +590,16 @@ def diff_icons(baseline, other) -> "dict[str, str]":
 def pixel_diff(baseline, other) -> "dict[str, str]":
     """Names whose *pixels* differ between two icon directories.
 
-    Byte equality is the wrong question for a regenerated set. A generated icon
-    is always a different file from the shipped one - single-strip, explicitly
-    straight alpha, and stripped of ~5 KB of Photoshop metadata - so a byte diff
-    reports all 97 files as changed even when the recipe did nothing to them.
-    For `mono`, which is pure `grayscale`, 79 of 97 icons come out
-    pixel-for-pixel identical while every one of them differs in bytes.
+    Byte equality is the wrong question for a regenerated set. A generated icon is
+    always a different file from the shipped one - single-strip, explicitly straight
+    alpha, stripped of ~5 KB of Photoshop metadata - so a byte diff reports all 97
+    files changed even when the recipe did nothing. For `mono`, pure `grayscale`,
+    79 of 97 come out pixel-for-pixel identical while every one differs in bytes.
 
-    Decoding is the expensive part (~0.4s for a 97-icon set in pure Python), so
-    this is not on the path of `tdtheme list`. It belongs where someone has
-    actually asked whether a recipe did anything.
-
-    `added` and `absent` are reported as in `diff_icons`: a missing or extra
-    file is a structural fact, and cannot be settled by comparing pixels.
+    Decoding is the expensive part (~0.4s for a 97-icon set in pure Python), so this
+    is not on `tdtheme list`'s path; it belongs where someone has asked whether a
+    recipe did anything. `added` and `absent` are reported as in `diff_icons`: a
+    missing or extra file is structural, not a pixel question.
     """
     base_dir, other_dir = Path(baseline), Path(other)
     out: "dict[str, str]" = {}

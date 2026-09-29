@@ -1,74 +1,50 @@
 """Generate TouchDesigner icon sets from recipes.
 
-This is the authoring half of what used to be one tool. `tdtheme` loads and
-installs finished themes; this builds them. It owns the pixel side of
-theming: a TIFF codec, a set of recolour and adjustment ops, and the recipe
-engine that combines them into a complete 97-icon directory.
-
-Import it as `tdthememaker.icons`; the command line lives in `cli.py`.
+The authoring half of what used to be one tool: `tdtheme` loads and installs
+finished themes, this builds them. It owns the pixel side - a TIFF codec, the
+recolour and adjustment ops, and the recipe engine that combines them into a
+complete 97-icon directory. Import it as `tdthememaker.icons`; the command line
+lives in `cli.py`:
 
     python3 -m tdthememaker.cli build midnight
     python3 -m tdthememaker.cli build midnight --check
     python3 -m tdthememaker.cli preview midnight
 
-What the recipes are for
-------------------------
-
 TouchDesigner reads its UI icons from
+`TouchDesigner.app/Contents/Resources/tfs/Config/Icons/*.tiff` - 97 TIFF files, no
+fallback, loaded once and cached for the process lifetime
+(`../docs/reverse-engineering.md` recovers that path from `libUI.dylib`). Colour
+themes are text overlays but icons are not, so an author has to produce real
+files, and a recipe is the reviewable form of that work: a short op list that,
+applied to the shipped baseline, determines the whole set. `midnight` is 2.5 KB of
+recipe against 128 KB of TIFF. The recipe is the source and the generated
+directory is the artifact, which is what a theme ships.
 
-    TouchDesigner.app/Contents/Resources/tfs/Config/Icons/*.tiff
+The codec is shared, not duplicated: `../tdtiff.py` holds the reader and both this
+module and `../tdicons.py` re-export it, so `read_tiff` is one function reached
+under three names. Only the writer lives here, because `tdtheme` reads and copies
+icons but never encodes one - a split leaving the subtle parts (alpha-convention
+detection, premultiplied round-tripping) with one implementation instead of two
+that must be kept in agreement. Hand-written because the project forbids
+third-party dependencies and neither Pillow nor tifffile is installed; the needed
+subset is small and completely known (8bpc, RGB/RGBA, photometric 2, single
+strip, LZW or none), and testable - `../tests/test_icons.py` decodes all 97
+shipped files, re-encodes them and asserts the pixels survive, with `sips` (macOS
+ImageIO, i.e. a different libtiff) as an independent check.
 
-97 TIFF files, no fallback, loaded once and cached for the process lifetime
-(see `../docs/reverse-engineering.md` for how that path was recovered
-from `libUI.dylib`). Colour themes are text overlays, but icons are not text,
-so a theme author has to produce real files. A recipe is the reviewable form
-of that work: a short list of ops that, applied to the shipped baseline,
-determines the whole set. `midnight` is 2.5 KB of recipe against 128 KB of
-TIFF, and the diff shows what changed and why.
+The two alpha traps: on reading, the `ExtraSamples` tag lies about 23 of the 95
+shipped icons that declare premultiplied alpha - they contain straight samples -
+so the reader decides from the samples instead; on writing, output is
+premultiplied, because TouchDesigner's compositor evaluates `src + bg*(1-a)` and
+straight data draws every antialiased edge at full strength, making icons read
+blocky. Both fail silently: the file is valid, it decodes, it renders wrong.
+`../docs/reverse-engineering.md` §5 has the derivation and measurements.
 
-The recipe is the source; the generated directory is the artifact. A theme
-that is going to be sent to someone else ships the directory.
-
-Why a hand-written codec rather than a library
-----------------------------------------------
-
-The project has a hard rule: no third-party dependencies. Neither Pillow nor
-tifffile is installed here, and asking for them would break that rule. The
-subset needed is small and completely known: 8bpc, RGB/RGBA, photometric 2,
-single strip, LZW or no compression. That is a few hundred lines of `struct`
-arithmetic, and the round-trip is testable - `../tests/test_icons.py` decodes all
-97 shipped files, re-encodes them, and asserts the pixels survive. Where an
-independent check is wanted, `sips` (macOS ImageIO, i.e. a different libtiff)
-is asked to read what we wrote.
-
-The codec is shared, not duplicated: `../tdtiff.py` holds the reader and both
-this module and `../tdicons.py` re-export it, so `read_tiff` is one function
-reached under three names. Only the writer lives here, because `tdtheme` reads
-and copies icons but never encodes one. That split is what leaves the subtle
-parts - alpha-convention detection, premultiplied round-tripping - with exactly
-one implementation, rather than two that have to be kept in agreement.
-
-The two alpha traps, in one paragraph
--------------------------------------
-
-Reading: the `ExtraSamples` tag lies about 23 of the 95 shipped icons that
-declare premultiplied alpha - they contain straight samples - so the reader
-decides from the samples instead. Writing: output is premultiplied, because
-TouchDesigner's compositor evaluates `src + bg*(1-a)` and straight data draws
-every antialiased edge at full strength, making icons read blocky. Both
-directions fail silently: the file is valid, it decodes fine, and it renders
-wrong. `../docs/reverse-engineering.md` §5 has the derivation and the
-measurements; both directions are exercised against `sips` in the tests.
-
-Storage model
--------------
-
-Deliberately wasteful, and the reason the two tools are split. A generated set
-is a **complete copy** of the 97 icons, not a sparse diff, so a theme
-directory is self-contained, an icon can be moved between themes with a plain
-file copy, and `tdtheme apply` can stay a dumb total overwrite with no patch
-logic that could half-apply. The cost is ~780 KB per theme, which is
-irrelevant next to a 764 KB install.
+Storage: a generated set is a **complete copy** of the 97 icons, not a sparse
+diff, and that is why the two tools are split. A theme directory is
+self-contained, an icon moves between themes with a plain file copy, and `tdtheme
+apply` stays a dumb total overwrite with no patch logic that could half-apply. The
+cost is ~780 KB per theme, next to a 764 KB install.
 """
 
 from __future__ import annotations
@@ -131,14 +107,7 @@ __all__ = [
 ]
 
 
-# ==========================================================================
-# TIFF constants
-# ==========================================================================
-
-
-# ==========================================================================
-# LZW
-# ==========================================================================
+# LZW ======================================================================
 
 
 def lzw_encode(data: bytes) -> bytes:
@@ -146,15 +115,14 @@ def lzw_encode(data: bytes) -> bytes:
 
     Two details that are not obvious:
 
-    - The dictionary is keyed on `(code << 8) | byte` integers rather than
-      byte strings. Same algorithm, but integer hashing in CPython is roughly
-      an order of magnitude cheaper than slicing and hashing `bytes` objects,
-      and this runs over ~1.9 MB of pixel data per full-set rebuild.
-    - Once the 4096-code table is full no new phrases may be added, but
-      encoding continues. Letting `next_code` run past 4095 emits codes that
-      do not fit in 12 bits and corrupts the rest of the stream - which is
-      what the first version of this function did, on the one shipped icon
-      whose pixel data is compressible enough to fill the table.
+    - The dictionary is keyed on `(code << 8) | byte` integers, not byte
+      strings. Same algorithm, but integer hashing in CPython is roughly an order
+      of magnitude cheaper than slicing and hashing `bytes`, and this runs over
+      ~1.9 MB of pixel data per full-set rebuild.
+    - Once the 4096-code table is full no new phrases may be added, but encoding
+      continues. Letting `next_code` run past 4095 emits codes that do not fit in
+      12 bits and corrupts the rest of the stream - which the first version of
+      this function did, on the one shipped icon compressible enough to fill it.
     """
     out = bytearray()
     buffer = 0
@@ -191,23 +159,23 @@ def lzw_encode(data: bytes) -> bytes:
                     bits += 1
                     max_code = (1 << bits) - 1
             else:
-                # The table is full, and this is where the format requires a
-                # Clear code: emit one at the current width, start over.
+                # The table is full, and this is where the format requires a Clear
+                # code: emit one at the current width, start over.
                 #
                 # Carrying on with a frozen dictionary appears to work and does
                 # not. This module's own decoder tolerates it, so a round-trip
                 # test passes and proves nothing - but libtiff rejects the strip
                 # outright, with no usable error message. That is how 2 of the 97
                 # shipped icons came to be re-encodable by us and readable by
-                # nobody: they were the two files big enough to use all 4096
-                # codes, while the largest that came close, at 3954, was fine.
+                # nobody: the two files big enough to use all 4096 codes, while
+                # the largest that came close, at 3954, was fine.
                 #
-                # The phrase just consumed is deliberately not re-registered.
-                # The decoder resets to 258 literals on Clear and only creates
-                # its first new entry when it reads the *following* code, so
+                # The phrase just consumed is deliberately not re-registered: the
+                # decoder resets to 258 literals on Clear and only creates its
+                # first new entry when it reads the *following* code, so
                 # registering here would leave the encoder one entry ahead and
                 # desynchronise the numbering. The normal path re-adds it on the
-                # next miss, which keeps both sides in step.
+                # next miss, keeping both sides in step.
                 emit(_CLEAR_CODE, bits)
                 table = {}
                 next_code = _FIRST_CODE
@@ -222,34 +190,25 @@ def lzw_encode(data: bytes) -> bytes:
     return bytes(out)
 
 
-# ==========================================================================
-# TIFF container
-# ==========================================================================
+# TIFF container ===========================================================
 
 
 def _survived_roundtrip(after: bytes, before: bytes, tolerance: int = 1) -> bool:
     """Whether the file we wrote really holds the image we meant to write.
 
-    The comparison is made in *premultiplied* space, and it has to be. Straight
-    space is the wrong invariant here for a reason worth stating, because
-    getting it wrong looks like a codec bug:
+    Compared in *premultiplied* space, and it has to be: straight space is the
+    wrong invariant, and getting it wrong looks like a codec bug. A pixel
+    (100,100,100,a=2) premultiplies to (1,1,1,2) and un-premultiplies to
+    (128,128,128,2) - a 28-point error from a perfectly correct file, because
+    premultiplied 8-bit storage cannot carry the colour of a nearly-transparent
+    pixel, so dividing by a tiny number is meaningless. In premultiplied space the
+    round trip is exact, and that is also the space TouchDesigner composites in,
+    so it is where fidelity is what matters.
 
-        (100,100,100,a=2) -> premultiply -> (1,1,1,2) -> un-premultiply
-                           -> (128,128,128,2)
-
-    A 28-point error, from a file that is perfectly correct. Premultiplied
-    8-bit storage simply cannot carry the colour of a nearly-transparent pixel,
-    so un-premultiplying one divides by a tiny number and the result is
-    numerically meaningless. Judged in premultiplied space the same round trip
-    is exact - (1,1,1,2) is precisely the right premultiplied form of
-    (100,100,100,2) - and since that is the space TouchDesigner composites in,
-    it is also the space where fidelity is what actually matters.
-
-    So: re-premultiply what we read back and compare against what we intended
-    to store, allowing one unit for the two independent roundings. Anything
-    beyond that is a genuine failure - a wrong strip length, a desynchronised
-    LZW stream, a bad dimension - and catching it at generation time, where
-    the fix is still cheap, is the entire point.
+    So re-premultiply what we read back and compare against what we meant to store,
+    allowing one unit for the two roundings. Anything beyond that is a real failure
+    - wrong strip length, desynchronised LZW, bad dimension - and catching it at
+    generation time, where the fix is cheap, is the point.
     """
     if len(after) != len(before):
         return False
@@ -265,16 +224,12 @@ def _premultiply(pixels: bytes) -> bytes:
     """Straight RGBA -> premultiplied RGBA.
 
     Every pixel is scaled, including a fully transparent one, and that is the
-    whole point of the function rather than an incidental detail. A
-    premultiplied compositor evaluates `src + dst*(1-a)`, so a pixel stored as
-    (200,100,50,a=0) does not vanish - with a=0 the destination term vanishes
-    instead, and the pixel renders as a solid orange block. Leaving the colour
-    of a transparent pixel alone is not a harmless shortcut, it inverts the
-    pixel from invisible to fully opaque.
-
-    Four of the 97 shipped icons carry colour under a=0 (they are among the 23
-    that declare premultiplied and are not), so this is reachable from real
-    data rather than hypothetical: 50 pixels across a generated set.
+    point rather than an incidental detail: a premultiplied compositor evaluates
+    `src + dst*(1-a)`, so (200,100,50,a=0) does not vanish - with a=0 the
+    destination term vanishes and the pixel renders as a solid orange block.
+    Leaving a transparent pixel's colour alone inverts it from invisible to
+    fully opaque. Four of the 97 shipped icons carry colour under a=0 (among the
+    23 that declare premultiplied and are not): 50 pixels across a generated set.
     """
     out = bytearray(len(pixels))
     for i in range(0, len(pixels), 4):
@@ -298,34 +253,23 @@ def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW,
     friends) that contribute nothing to rendering; dropping them makes a
     regenerated icon both smaller and easier to reason about.
 
-    `image.pixels` is always straight (unassociated) RGBA, whatever the
+    `image.pixels` is always straight (unassociated) RGBA whatever the
     `premultiplied` flag says; the conversion happens here, on the way out.
+    Premultiplied is the default because that is the convention TouchDesigner
+    composites in, and matching it is the only thing that matters: 95 of the 97
+    shipped icons are premultiplied, and libPOP.dylib - the panel and icon-drawing
+    library - carries explicit `premult`, `premultcolor` and `premultrgbbyalpha`
+    handling, so the renderer is built around premultiplied samples. The module
+    docstring has the silent-failure mode; in short, a pixel at alpha 13/255 whose
+    colour is the full tint (140,172,255) lands at luma 171 instead of the 8.8 it
+    should be, every antialiased edge pixel is drawn at full strength, and a 24x24
+    glyph comes out 2.83x too heavy.
 
-    `premultiplied=True` is the default because that is the convention
-    TouchDesigner actually composites in, and matching it is the only thing
-    that matters. 95 of the 97 shipped icons are premultiplied, and
-    libPOP.dylib - the panel and icon-drawing library - carries explicit
-    `premult`, `premultcolor` and `premultrgbbyalpha` handling, so the
-    renderer is built around premultiplied samples.
-
-    Writing straight alpha into that renderer is not a cosmetic mismatch, it
-    is a visible bug, and it is silent: the file decodes, `sips` agrees with
-    it, and the image still looks like an icon. But a premultiplied
-    compositor computes `src + bg*(1-a)`, so a pixel with alpha 13/255 whose
-    colour is the full tint (140,172,255) lands at luma 171 instead of the
-    8.8 it should be. Every antialiased edge pixel is drawn at full strength,
-    which closes the gaps between strokes and turns smooth 16x16 glyphs into
-    hard, blocky silhouettes - small detail fills in and the icons read as
-    pixelated. Measured on a 24x24 glyph, the whole icon came out 2.83x too
-    heavy.
-
-    An earlier version of this module reasoned the opposite way: that because
-    TIFF leaves the convention undefined and generic decoders assume
-    associated, the safe choice was to declare ExtraSamples=2 explicitly. That
-    is true about libtiff, Photoshop and image viewers, and irrelevant here.
-    The one decoder that matters is TouchDesigner's, and it wants the same
-    convention as the files it already ships. Being unambiguous for third
-    parties is worth nothing if the renderer draws the result wrong.
+    An earlier version declared ExtraSamples=2 explicitly, reasoning that TIFF
+    leaves the convention undefined and generic decoders assume associated. True
+    of libtiff, Photoshop and image viewers, irrelevant here: the one decoder that
+    matters is TouchDesigner's, and being unambiguous for third parties is worth
+    nothing if the renderer draws the result wrong.
     """
     if compression not in (COMPRESSION_NONE, COMPRESSION_LZW):
         raise IconError(f"unsupported output compression {compression}")
@@ -340,7 +284,6 @@ def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW,
 
     # BitsPerSample has 4 entries, so it needs an out-of-line value block.
     bits_block = struct.pack("<4H", 8, 8, 8, 8)
-    # ResolutionUnit, and the two rational resolutions, are each <= 4 bytes.
     x_res = struct.pack("<2I", 72, 1)
     y_res = struct.pack("<2I", 72, 1)
 
@@ -385,19 +328,12 @@ def write_tiff(image: TiffImage, *, compression: int = COMPRESSION_LZW,
     return b"".join([header, ifd, bits_block, x_res, y_res, padding, data])
 
 
-# ==========================================================================
-# PNG (stdlib zlib only) - for previews, never for the install
-# ==========================================================================
-
-
-# ==========================================================================
-# Colour transforms
-# ==========================================================================
+# Colour transforms ========================================================
 #
 # All of these take and return straight-alpha RGBA and leave alpha untouched.
 # Alpha is the icon's shape; a theme changes what colour the shape is painted,
-# never which pixels exist. Recolouring a fully transparent pixel is a no-op by
-# construction because its colour is undefined and never sampled.
+# never which pixels exist, so recolouring a fully transparent pixel is a no-op by
+# construction - its colour is undefined and never sampled.
 
 def _clamp8(value: float) -> int:
     if value <= 0:
@@ -439,11 +375,10 @@ def op_grayscale(image: TiffImage, amount: float = 1.0) -> TiffImage:
 def op_tint(image: TiffImage, color, strength: float = 1.0) -> TiffImage:
     """Repaint every pixel with `color`, keeping each pixel's own brightness.
 
-    This is the transform that actually makes a theme read as a theme: the
-    glyph's shading and anti-aliasing survive, but its hue comes from the
-    theme rather than from the stock palette. `strength` blends back towards
-    the original, which is how you get a subtly tinted set rather than a flat
-    silhouette.
+    The transform that makes a theme read as a theme: the glyph's shading and
+    anti-aliasing survive but its hue comes from the theme, not the stock
+    palette. `strength` blends back towards the original, for a subtly tinted
+    set rather than a flat silhouette.
     """
     tr, tg, tb = (float(c) for c in color)
     # Normalise the target to unit brightness so a dark accent does not also
@@ -492,11 +427,10 @@ def op_brightness(image: TiffImage, factor: float) -> TiffImage:
 def op_contrast(image: TiffImage, amount: float, pivot: float = 128.0) -> TiffImage:
     """Push each channel away from `pivot` by `amount`.
 
-    Grayscale alone leaves an icon as a set of mid-greys, which is a different
-    problem from a coloured one: the glyphs go soft and stop reading at 20x20.
-    A theme that removes mid-tones from the interface - see the `bnw` recipe -
-    needs the same treatment applied to the icons, or the icons end up as the
-    only soft thing left on screen.
+    Grayscale alone leaves mid-greys, a different problem from a coloured set:
+    the glyphs go soft and stop reading at 20x20. A theme that removes mid-tones
+    from the interface - see the `bnw` recipe - needs the same treatment here, or
+    the icons are the only soft thing left on screen.
     """
     def convert(r, g, b, a):
         return ((r - pivot) * amount + pivot,
@@ -516,17 +450,16 @@ def op_solid(image: TiffImage, color) -> TiffImage:
     return _each_pixel(image, convert)
 
 
-#: Every op a recipe may name, and the argument names each one takes. Recipes
-#: are hand-edited JSON, so an unknown op has to fail loudly rather than be
-#: skipped - a silently ignored line means an icon set that is subtly wrong.
+#: Every op a recipe may name. Recipes are hand-edited JSON, so an unknown op has
+#: to fail loudly rather than be skipped - a silently ignored line means an icon
+#: set that is subtly wrong.
 #:
-#: The accepted and required argument names are derived from each function's
-#: signature rather than restated here, because a hand-kept list drifts: it
-#: briefly claimed `strength` was required (breaking three recipes) and then
-#: that it was unknown (breaking them differently). Deriving both from the
-#: signature means an optional argument like `strength` or `pivot` can be
-#: omitted, an unknown one is still rejected, and adding a parameter to an op
-#: cannot leave this table out of step.
+#: Accepted and required argument names are derived from each function's signature
+#: rather than restated here, because a hand-kept list drifts: it briefly claimed
+#: `strength` was required (breaking three recipes) and then that it was unknown
+#: (breaking them differently). Deriving both means an optional argument like
+#: `strength` or `pivot` can be omitted, an unknown one is still rejected, and a
+#: new parameter cannot leave this table out of step.
 _OPS = {
     "grayscale": op_grayscale,
     "tint": op_tint,
@@ -552,41 +485,28 @@ def _op_args(function) -> "tuple[set[str], list[str]]":
     return accepted, required
 
 
-# ==========================================================================
-# Icon sets on disk
-# ==========================================================================
-# Recipes
-# ==========================================================================
+# Recipes -------------------------------------------------------------------
 #
 # A theme's icons are *derived* from the baseline by a small ordered list of
 # transforms, recorded in `recipes/<name>.recipe.json`:
 #
-#   {
-#     "version": 1,
-#     "ops": [
-#       {"match": "*",              "op": "grayscale", "amount": 1.0},
-#       {"match": "*",              "op": "tint", "color": [214, 138, 74]},
-#       {"match": "Error*",         "op": "tint", "color": [232, 96, 84],
-#                                  "strength": 1.0}
-#     ]
-#   }
+#   {"version": 1,
+#    "ops": [{"match": "*", "op": "grayscale", "amount": 1.0},
+#            {"match": "*", "op": "tint", "color": [214, 138, 74]},
+#            {"match": "Error*", "op": "tint", "color": [232, 96, 84],
+#             "strength": 1.0}]}
 #
-# `match` is an fnmatch glob on the icon name without its extension. Ops apply
-# in order, so a later op can override an earlier one - which is how a theme
-# says "tint everything amber, except keep errors red".
-#
-# Recipes rather than committed binaries because the alternative is a
-# 764 KB opaque blob per theme that nobody can review or tweak. A recipe is
-# twelve lines, it regenerates deterministically, and editing "make the warn
-# icons more orange" is a one-token change. The generated `.tiff` files are
-# still written to disk, and committed, because `tdtheme apply` must not
-# depend on a codec being correct at apply time - and because a theme has to
-# be sendable to someone who has never heard of this tool.
+# `match` is an fnmatch glob on the icon name without its extension. Ops apply in
+# order, so a later op can override an earlier one - which is how a theme says
+# "tint everything amber, except keep errors red". Recipes rather than committed
+# binaries because the alternative is a 764 KB opaque blob per theme that nobody
+# can review or tweak: a recipe is twelve lines, it regenerates deterministically,
+# and "make the warn icons more orange" is a one-token change. The generated
+# `.tiff` files are still written and committed, because `tdtheme apply` must not
+# depend on a codec being correct at apply time - and because a theme has to be
+# sendable to someone who has never heard of this tool.
 
 RECIPE_VERSION = 1
-
-
-# ==========================================================================
 
 
 def _match(name: str, pattern: str) -> bool:
@@ -646,11 +566,10 @@ _RECOLOUR_OPS = frozenset({"tint", "solid", "hue_rotate"})
 def _select_ops(matching: list) -> "tuple[dict | None, list]":
     """Decide which of one icon's matching ops actually run.
 
-    Returns `(winner, adjust)` where `winner` is the single recolouring op to
-    apply - the last one, or None if the icon had none - and `adjust` is every
-    adjusting op in recipe order. See apply_recipe for why the two halves are
-    treated differently; keeping the decision here rather than in the caller
-    means the policy lives in one place.
+    `(winner, adjust)`: the single recolouring op to apply - the last one, or
+    None if the icon had none - and every adjusting op in recipe order. See
+    apply_recipe for why the halves are treated differently; keeping the
+    decision here rather than in the caller means the policy lives in one place.
     """
     recolour = [s for s in matching if s.get("op") in _RECOLOUR_OPS]
     adjust = [s for s in matching if s.get("op") not in _RECOLOUR_OPS]
@@ -664,18 +583,16 @@ def apply_recipe(baseline_dir, destination, recipe: dict, *,
 
     An empty `ops` list means "ship the baseline icons unchanged", and that is
     taken literally: the files are **copied byte for byte**, not decoded and
-    re-encoded. This is what the `default` theme uses, and it matters more than
-    it looks. Every theme carries a complete icon set precisely so that
-    `apply` is a total overwrite - otherwise applying `sunset` and then
-    `default` would leave the sunset icons in place, because a theme with no
-    icon directory writes nothing. For that reset to be lossless, `default`
-    has to restore the shipped bytes and not merely pixels that look the same.
-    Re-encoding would also defeat the purpose: the generated files drop the
-    ~5 KB of Photoshop metadata the shipped icons carry, so a re-encode is
-    never byte-identical no matter how few ops ran.
-
-    With ops present, every baseline icon is still written, whether or not any
-    op matched it, so the set stays complete.
+    re-encoded. This is what the `default` theme uses, and it matters more than it
+    looks. Every theme carries a complete icon set precisely so `apply` is a total
+    overwrite - otherwise applying `sunset` then `default` would leave the sunset
+    icons in place, because a theme with no icon directory writes nothing. For that
+    reset to be lossless `default` has to restore the shipped bytes, not merely
+    pixels that look the same. Re-encoding would also defeat the purpose: generated
+    files drop the ~5 KB of Photoshop metadata the shipped icons carry, so a
+    re-encode is never byte-identical however few ops ran. With ops present, every
+    baseline icon is still written whether or not any op matched it, so the set
+    stays complete.
     """
     baseline_dir = Path(baseline_dir)
     destination = Path(destination)
@@ -725,25 +642,24 @@ def apply_recipe(baseline_dir, destination, recipe: dict, *,
         original_pixels = image.pixels
         matching = [spec for spec in ops if _match(stem, spec.get("match", "*"))]
 
-        # Recolouring ops replace; adjusting ops accumulate. This distinction is
+        # Recolouring ops replace; adjusting ops accumulate. That distinction is
         # the whole reason a recipe can say "a later op wins" and mean it.
         #
-        # `tint` maps a pixel to `colour * luma(pixel)`, so it is not
-        # composable: running it twice reads the first result's luminance as
-        # though it were the original shading, and multiplies by the target's
-        # relative luminance a second time. A pixel that should land on
-        # (255,92,84) for the error group instead landed on (171,62,56) - 33%
-        # too dark - because the general periwinkle tint had already been
-        # applied and then tinted again. That hit 19 of the 97 icons in
-        # `midnight` and 27 in `sunset`, and silently, since every file was a
-        # valid TIFF and `sips` agreed with all of it.
+        # `tint` maps a pixel to `colour * luma(pixel)`, so it is not composable:
+        # running it twice reads the first result's luminance as though it were
+        # the original shading and multiplies by the target's relative luminance a
+        # second time. A pixel that should land on (255,92,84) for the error group
+        # instead landed on (171,62,56) - 33% too dark - because the general
+        # periwinkle tint had already been applied and then tinted again. That hit
+        # 19 of the 97 icons in `midnight` and 27 in `sunset`, silently, since
+        # every file was a valid TIFF and `sips` agreed with all of it.
         #
-        # So: take the last matching recolour op, run it on the *original*
-        # image so it sees the artwork's true luminance, then apply the
-        # adjusting ops in order on top. `bnw` depends on the accumulate half -
-        # its contrast passes go 1.5 then 1.7 and are meant to compound - and
-        # `midnight` depends on the replace half, where the semantic groups
-        # exist precisely to overwrite the general tint.
+        # So: take the last matching recolour op, run it on the *original* image
+        # so it sees the artwork's true luminance, then apply the adjusting ops in
+        # order on top. `bnw` depends on the accumulate half - its contrast passes
+        # go 1.5 then 1.7 and are meant to compound - and `midnight` on the
+        # replace half, whose semantic groups exist precisely to overwrite the
+        # general tint.
         winner, adjust = _select_ops(matching)
 
         image = _run_op(original_image, winner) if winner else image
@@ -752,9 +668,9 @@ def apply_recipe(baseline_dir, destination, recipe: dict, *,
         applied = bool(matching)
 
         raw = write_tiff(image, compression=compression)
-        # A generated file that will not decode is worse than no file: it
-        # would be written into the app bundle and silently blank the icon.
-        # Verify here, once, at generation time, where the fix is cheap.
+        # A generated file that will not decode is worse than no file: it would
+        # land in the app bundle and silently blank the icon. Verify here, once,
+        # at generation time, where the fix is cheap.
         if not _survived_roundtrip(read_tiff(raw).pixels, image.pixels):
             raise IconError(f"internal error: {name} did not survive the TIFF "
                             f"round-trip and was not written")
@@ -765,10 +681,9 @@ def apply_recipe(baseline_dir, destination, recipe: dict, *,
         if raw == source:
             identical += 1
         # Byte equality is close to useless as a "did this change?" signal for a
-        # re-encoded theme, and actively misleading: every generated file
-        # differs from the shipped one because the ~5 KB of Photoshop metadata
-        # is dropped, so a byte diff reports all 97 icons changed even when a
-        # recipe op did nothing to them. Pixels are the honest measure.
+        # re-encoded theme, and actively misleading: every generated file differs
+        # because the ~5 KB of Photoshop metadata is dropped, so a byte diff
+        # reports all 97 changed even when a recipe op did nothing.
         if image.pixels == original_pixels:
             pixel_identical += 1
         if progress is not None:

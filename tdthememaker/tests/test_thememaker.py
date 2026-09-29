@@ -1,16 +1,15 @@
 """Tests for the icon generator: the TIFF writer, the ops, and the recipes.
 
-This is the writing half of the icon layer, and it is the half that can fail
-silently. A generated icon that decodes in this tool but not in TouchDesigner,
-or that decodes and renders too dark because its alpha convention is wrong,
-looks like a working icon set. So the assertions here are mostly about the ways
-that goes quietly wrong, and the codec is checked against `sips` - Apple's
-decoder, which shares no code with this file - rather than only against
-itself.
+This is the writing half of the icon layer, and the half that can fail silently.
+A generated icon that decodes in this tool but not in TouchDesigner, or that
+decodes and renders too dark because its alpha convention is wrong, looks like a
+working icon set, so the assertions are mostly about the ways that goes quietly
+wrong - and the codec is cross-checked against `sips`, Apple's decoder, which
+shares no code with this file.
 
-The most important test in the file is the last one: every committed theme's
-icon set must be reproducible, byte for byte, from its recipe. That is what
-makes a recipe a real source description rather than a historical note.
+The most important test in the file: every committed theme's icon set must be
+reproducible, byte for byte, from its recipe - what makes a recipe a real source
+description rather than a historical note.
 
 Run:  python3 tdthememaker/tests/test_thememaker.py
 """
@@ -81,11 +80,10 @@ def theme_recipe_path(name: str) -> Path:
     return RECIPES / f"{name}.recipe.json"
 
 
-# The one committed icon no recipe can reproduce, and the reason it is
-# worth two separate checks. `defaultnowarn.recipe.json` states its contract
-# in the recipe: 64x64 RGBA with every decoded byte zero, so the glyph does
-# not render. Two things follow, and they are checked at two points in the
-# run below, because they fail differently.
+# The one committed icon no recipe can reproduce, and the reason it is worth two
+# separate checks. `defaultnowarn.recipe.json` states its contract in the recipe:
+# 64x64 RGBA with every decoded byte zero, so the glyph does not render. Two
+# things follow, checked at two points below because they fail differently:
 #
 #   - the pixels: is the icon still the blank face, at the right size;
 #   - the bytes: has anything rewritten the file. A rewrite that happens to
@@ -130,8 +128,8 @@ check(icons.COMPRESSION_NONE == 1 and icons.COMPRESSION_LZW == 5,
 # than an error, so each has a named test here:
 #   - the decoder has to widen its code width when len(table) >= 4094, not at
 #     exactly 4096, or codes written at 12 bits get read back at 13;
-#   - the encoder has to stop handing out new codes once the table is full,
-#     not write a 13-bit code into a 12-bit field;
+#   - the encoder has to stop handing out new codes once the table is full, not
+#     write a 13-bit code into a 12-bit field;
 #   - a TIFF may split its data across several strips, and the shipped set
 #     contains five files that do.
 sample = bytes(range(256)) * 40
@@ -146,10 +144,10 @@ ramp = bytes((i * 7919) % 256 for i in range(50000))
 check(icons.lzw_decode(icons.lzw_encode(ramp)) == ramp,
       "LZW round-trips an incompressible payload (worst case for the table)")
 
-# The table-full path, which the payloads above all miss. They compress well
+# The table-full path, which the payloads above all miss: they compress well
 # enough to stay under 4096 codes, so a frozen dictionary never happens and a
-# round trip is happy either way - which is exactly why this went unnoticed
-# until libtiff refused to read two of the shipped overlays.
+# round trip is happy either way - which is why this went unnoticed until libtiff
+# refused to read two of the shipped overlays.
 #
 # `checks` counts the Clear codes the encoder emits, which is the observable
 # difference between a correct encoder and one that silently freezes.
@@ -216,7 +214,7 @@ for icon in names:
             # Compared through the premultiplied form, not byte-for-byte.
             # Re-encoding is genuinely lossy for a partially transparent pixel -
             # premultiplied 8-bit cannot carry its colour - and demanding exact
-            # equality would be asserting something untrue rather than something
+            # equality would assert something untrue rather than something
             # correct. `_survived_roundtrip` states the real invariant.
             if not icons._survived_roundtrip(
                     icons.read_tiff(
@@ -242,12 +240,11 @@ check(found_multi == sorted(MULTI_STRIP),
       f"exactly the 5 overlay icons are multi-strip, and they are decoded "
       f"strip by strip (found {len(found_multi)}: {found_multi[:2]}...)")
 
-# 95 of the 97 shipped icons are premultiplied, which is the single most
-# consequential fact about this file format. A reader that treats them as
-# straight alpha renders every glyph too light; one that treats straight data
-# as premultiplied renders it too dark. Both are silent. The two blocks below
-# test both directions against that fact; ../docs/reverse-engineering.md §5 is
-# where it is derived.
+# 95 of the 97 shipped icons are premultiplied, the single most consequential
+# fact about this file format. A reader that treats them as straight alpha
+# renders every glyph too light; one that treats straight data as premultiplied
+# renders it too dark. Both are silent, and the two blocks below test both
+# directions against that fact. ../docs/reverse-engineering.md §5 derives it.
 alpha_hist = {}
 for v in shipped.values():
     alpha_hist[v["alpha"]] = alpha_hist.get(v["alpha"], 0) + 1
@@ -264,10 +261,10 @@ for theme in THEMES:
     recipe_file = theme_recipe_path(theme)
     if not recipe_file.exists():
         continue
-    # A theme with no ops is copied byte for byte from the baseline, so it
-    # keeps whatever convention the vendor shipped and there is nothing to
-    # assert. `default` and `defaultnowarn` are both in that position, and
-    # `defaultnowarn` additionally carries one hand-placed icon.
+    # A theme with no ops is copied byte for byte from the baseline, so it keeps
+    # the vendor's convention and there is nothing to assert. `default` and
+    # `defaultnowarn` are both in that position, the latter also carrying one
+    # hand-placed icon.
     if not (json.loads(recipe_file.read_text()).get("ops") or []):
         continue
     regen = icons.icon_manifest(theme_icons_dir(theme))
@@ -281,8 +278,8 @@ for theme in THEMES:
 # rather than a matter of taste, because in genuine premultiplied data no
 # channel can exceed alpha, so one pixel with max(RGB) > alpha refutes the tag
 # outright. Believing it cost those 23 icons their antialiasing, since
-# un-premultiplying (102,102,102,a=91) yields (285,285,285) and clamps the
-# whole edge ramp to white. So the reader decides from the data.
+# un-premultiplying (102,102,102,a=91) yields (285,285,285) and clamps the whole
+# edge ramp to white. So the reader decides from the data;
 # ../docs/reverse-engineering.md §5 has the measurements.
 def stored_samples(raw):
     """The samples as they sit in the file, before any alpha interpretation."""
@@ -387,16 +384,16 @@ check(one_strip == {1}, f"regenerated icons are single-strip (got {one_strip})")
 
 # ------------------------------------------------------ independent decoder
 #
-# Everything above uses this tool's own reader, so a systematic misreading of
-# the format would pass every one of those tests. `sips` is Apple's decoder and
+# Everything above uses this tool's own reader, so a systematic misreading of the
+# format would pass every one of those tests. `sips` is Apple's decoder and
 # shares no code with this file, which makes it a real second opinion.
 #
 # It matters most for the alpha convention. 95 of the 97 shipped icons are
 # premultiplied; we normalise to straight on read and transform in that space,
 # so the output has to be *declared* straight or a decoder multiplies alpha in
-# again. Nothing errors when that goes wrong - the file is a valid TIFF, it
-# just renders too dark, and its thinnest strokes disappear. A test that only
-# checked "sips can read it" would sail straight past it.
+# again. Nothing errors when that goes wrong - the file is a valid TIFF, it just
+# renders too dark, and its thinnest strokes disappear. A test that only checked
+# "sips can read it" would sail straight past it.
 
 section("Independent decode (sips)")
 
@@ -493,7 +490,7 @@ else:
     #     table, so the round-trip tests above all passed while sips rejected
     #     the two largest overlays outright. "Can it read the header" is not
     #     enough - a broken strip still reports a correct width - so this
-    #     converts, which forces a real decode.
+    #     converts, forcing a real decode.
     libtiff_blind = []
     for icon in names:
         image = icons.read_tiff((BASE / icon).read_bytes())
@@ -532,12 +529,12 @@ else:
           f"sips reproduces our pixels exactly at full opacity across "
           f"{len(sample)} icons (worst channel difference {worst})")
 
-    # And in premultiplied space, over every pixel including the near-
-    # transparent ones, a small tolerance. sips un-premultiplies on the way to
-    # PNG, and dividing by an alpha of 1 or 2 amplifies its own rounding, so a
-    # few units of disagreement there is sips' arithmetic and not ours. The
-    # vendor's own premultiplied files show the same behaviour, which is the
-    # reason this is acceptable rather than merely tolerable.
+    # And in premultiplied space, over every pixel including the near-transparent
+    # ones, a small tolerance. sips un-premultiplies on the way to PNG, and
+    # dividing by an alpha of 1 or 2 amplifies its own rounding, so a few units
+    # of disagreement there is sips' arithmetic and not ours. The vendor's own
+    # premultiplied files show the same behaviour, which is what makes this
+    # acceptable rather than merely tolerable.
     worst_pm = 0
     for icon in sample:
         source = theme_icons_dir("midnight") / icon
@@ -670,14 +667,14 @@ check([s["op"] for s in icons._select_ops(
      {"op": "contrast", "amount": 1.7}])[1]] == ["grayscale", "contrast", "contrast"],
       "adjusting ops are all kept, in recipe order")
 
-# Of the 97 shipped icons, 83 have neutral ink and 14 are chromatic. This is
-# the fact the recipes are built on: a hue or tint op moves a neutral glyph
-# completely and a chromatic one only partially, which is why `midnight` tints
-# the general case and then overwrites the semantic groups by name.
+# Of the 97 shipped icons, 83 have neutral ink and 14 are chromatic - the fact
+# the recipes are built on: a hue or tint op moves a neutral glyph completely
+# and a chromatic one only partially, which is why `midnight` tints the general
+# case and then overwrites the semantic groups by name.
 #
 # The measure is the chromaticity of each icon's alpha-weighted mean ink colour,
-# `sum(channel * alpha) / sum(alpha)`. That form is deliberate. Classifying by
-# a single pixel's colour is ill-conditioned, because the strongest pixel is
+# `sum(channel * alpha) / sum(alpha)`. That form is deliberate: classifying by a
+# single pixel's colour is ill-conditioned, because the strongest pixel is
 # usually an antialiased edge one whose colour has to be recovered by dividing
 # by a small alpha, and dividing by 1 or 2 amplifies rounding into nonsense.
 #
@@ -819,7 +816,7 @@ for theme in THEMES:
 #
 # The contract that makes a recipe worth having. A theme's committed icon set
 # must be exactly what its recipe produces - not approximately, not visually
-# equivalent, the same bytes - so that anyone can regenerate, review the recipe
+# equivalent, the same bytes - so anyone can regenerate, review the recipe
 # instead of 780 KB of TIFF, and get the same directory back.
 #
 # `defaultnowarn` is the deliberate exception and the reason this is a test
@@ -911,13 +908,10 @@ check(T._load_overlay_fallback(G.dump_overlay(sample, "TouchOptions"),
                                "TouchOptions") == sample,
       "the fallback loader agrees, so the writer needs no PyYAML")
 
-# A fresh install in a temp dir, so the real one is never read or written.
-#
-# The last-applied marker is captured first, because it is the easiest thing
-# for a test run to clobber: it lives in the repository root, nothing else
-# mentions it, and a wrong value there reads as a fact about the user's
-# install. It is gitignored, so a fresh clone has none and the check below
-# has to cope with its absence rather than assume a file is there.
+# A fresh install in a temp dir, so the real one is never read or written. The
+# last-applied marker is captured first, because it is the easiest thing here to
+# clobber; it is gitignored, so a fresh clone has none and the check below has to
+# cope with its absence rather than assume a file is there.
 applied_marker = ROOT / ".applied.json"
 marker_before = applied_marker.read_bytes() if applied_marker.exists() else None
 
@@ -931,9 +925,7 @@ themes_dir = export_tmp / "themes"
 
 # Every path `apply` and `export` reach for is redirected, including `root`,
 # which is where the "last applied" marker lives. A test run must not write
-# inside the real repository, and the marker is the easiest thing to miss:
-# nothing else in the module mentions the repo, and a wrong value there looks
-# like a real fact about the user's install.
+# inside the real repository.
 T.root = export_tmp
 T.themes_dir = themes_dir
 T.backups_dir = export_tmp / "backups"
@@ -1008,8 +1000,8 @@ shutil.copy2(ROOT / "baseline" / "TouchOptions", install_dir / "TouchOptions")
 
 # The CLI must fail with a message, not a traceback. Called in-process rather
 # than through a subprocess: `themes_dir` has no environment override, so a
-# subprocess would write into the real repository instead of this temp dir.
-# An unusable name is rejected before anything is created.
+# subprocess would write into the real repository instead of this temp dir. An
+# unusable name is rejected before anything is created.
 cli_error = io.StringIO()
 with contextlib.redirect_stderr(cli_error):
     exit_code = thememaker_cli.cmd_export(
@@ -1031,8 +1023,8 @@ check((applied_marker.read_bytes() if applied_marker.exists() else None)
 
 # The hand-placed icon check above ran against the real theme; make sure the
 # temp-dir games above did not touch it. The hash is the stronger of the two
-# assertions: a rewrite that left the image blank would still be a rewrite,
-# and `T.root` and friends were reassigned a dozen lines up.
+# assertions: a rewrite that left the image blank would still be a rewrite, and
+# `T.root` and friends were reassigned a dozen lines up.
 check(warn_face_digest() == warn_face_before,
       "the hand-placed icon's bytes are unchanged by the export tests")
 check_blank_warn_face(
@@ -1042,8 +1034,8 @@ check_blank_warn_face(
 # ------------------------------------------------------------ the wrapper
 #
 # The other entry point, and the one that had none. `tdthememaker` was only
-# reachable as `python3 -m tdthememaker.cli`, which needs the repository root
-# as the working directory; there is now a `tdthememaker-cli` wrapper beside
+# reachable as `python3 -m tdthememaker.cli`, which needs the repository root as
+# the working directory; there is now a `tdthememaker-cli` wrapper beside
 # `tdtheme` and a symlink for it on PATH.
 #
 # The symlink loop is duplicated from the `tdtheme` wrapper rather than shared,
@@ -1106,9 +1098,9 @@ check(bare.returncode == 0 and "defaultnowarn" in bare.stdout,
 
 # What this wrapper does that `tdtheme` does not have to: it puts the repository
 # on PYTHONPATH rather than `cd`-ing there, because the package uses relative
-# imports and has to be run as a module. The point of avoiding `cd` is that a
-# relative path the caller passes still means what they meant, so check that
-# rather than assume it.
+# imports and has to be run as a module. Avoiding `cd` is the point - a relative
+# path the caller passes still means what they meant - so check that rather than
+# assume it.
 sheet = away / "sheet.png"
 written = run_wrapper([str(WRAPPER), "preview", "mono", "--out", "sheet.png"],
                       away)

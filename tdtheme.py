@@ -1,25 +1,23 @@
 """Core library for TouchDesigner theme management.
 
-Deliberately free of CLI concerns: no argparse, no print, no sys.exit. The
-public functions return data and raise ThemeError subclasses, so the same
-code can back a future GUI or an in-TouchDesigner Text DAT.
+Deliberately free of CLI concerns - no argparse, no print, no sys.exit. The public
+functions return data and raise ThemeError subclasses, so the same code can back
+a future GUI or an in-TouchDesigner Text DAT.
 
 File formats (both reverse-engineered, both verified byte-exact):
 
   TouchColors   key <TAB> r <TAB> g <TAB> b <CRLF>
   TouchOptions  key <TAB> value <CRLF>
 
-The central design decision is that a parsed file keeps the *full list of
-fields after the key* rather than a decoded RGB triple or scalar. That is
-what makes a byte-identical round-trip possible, because two shipped
-TouchColors lines carry an extra empty second field:
+A parsed file keeps the *full list of fields after the key* rather than a
+decoded RGB triple, which is what makes a byte-identical round-trip possible:
+two shipped TouchColors lines carry an extra empty second field
 
   dialog.commenthint        <TAB> <TAB> 0.2 <TAB> 0.2 <TAB> 0.2
   dialog.commenthint.comp   <TAB> <TAB> 0.5 <TAB> 0.5 <TAB> 0.5
 
-A parser that reads "the last three fields" gets the colour right, but a
-serializer that writes back only RGB would silently drop the empty field
-and change the file. Storing whole field lists makes that impossible.
+A parser reading "the last three fields" gets the colour right, but a
+serializer writing back only RGB would drop the empty field.
 """
 
 from __future__ import annotations
@@ -54,9 +52,7 @@ __all__ = [
 ]
 
 
-# --------------------------------------------------------------------------
-# Errors
-# --------------------------------------------------------------------------
+# Errors -------------------------------------------------------------------
 
 class ThemeError(Exception):
     """Base for every error this module raises."""
@@ -78,9 +74,7 @@ class ValidationError(ThemeError):
         self.findings = findings
 
 
-# --------------------------------------------------------------------------
-# Paths
-# --------------------------------------------------------------------------
+# Paths --------------------------------------------------------------------
 
 TD_APP = Path("/Applications/TouchDesigner.app")
 TD_CONFIG = TD_APP / "Contents/Resources/tfs/Config"
@@ -92,34 +86,29 @@ STORE_FILES = (TOUCHCOLORS, TOUCHOPTIONS)
 #: Files whose values are RGB triples rather than opaque strings.
 COLOR_FILES = frozenset({TOUCHCOLORS})
 
-#: Name of the icon directory inside the same config tree. Not a guess: see
-#: the module docstring of tdicons.py for the `libUI.dylib` strings and the
-#: `ICO_Manager::loadIcon` call site that build `<ConfigDir>/Icons/<Name>.tiff`.
+#: Name of the icon directory in the same config tree. Not a guess: see the
+#: module docstring of tdicons.py for the `libUI.dylib` strings and the
+#: `ICO_Manager::loadIcon` call site building `<ConfigDir>/Icons/<Name>.tiff`.
 ICONS_DIRNAME = "Icons"
 
 #: The subdirectory of the config tree that holds the UI layout file.
 SYSTEM_DIRNAME = "System"
 
 #: Everything about the UI that is not a colour or an option - dialog and window
-#: geometry, column widths, which panes are open - lives in this one file, and
-#: it is a `.tox`: TouchDesigner's own binary project format, which only
-#: TouchDesigner can write. So a UI change cannot be made by editing a value the
-#: way the other two stores can. It can still be *installed*, because the file is
-#: just a file: a theme ships one and `apply` copies it over the top.
-#:
-#: Nothing here parses it, decodes it, or checks that the write worked. It is
-#: 1.1 MB of opaque bytes and there is no way to tell from the outside whether
-#: TouchDesigner liked them, so a check here could only report that bytes
-#: arrived - which is what `write_file` already guarantees. The one thing worth
-#: getting right is *which* file gets written, since two themes silently sharing
-#: one is the failure nobody would notice.
+#: geometry, column widths, open panes - lives in this one file, a `.tox`:
+#: TouchDesigner's own binary project format, so no value in it can be edited by
+#: this tool. It can still be *installed*: a theme ships one and `apply` copies it
+#: over the top. Nothing parses, decodes or checks it. 1.1 MB of opaque bytes, with
+#: no way to tell from outside whether TouchDesigner liked them, so a check could
+#: only report that bytes arrived - what `write_file` already guarantees. Getting
+#: *which* file is written right is the one thing that matters, since two themes
+#: silently sharing one is the failure nobody would notice.
 UI_TOX = "ui.tox"
 
 #: The theme whose `ui.tox` is the fallback for every other theme. Fixed rather
 #: than "first alphabetically", because `apply` on a theme that ships no UI file
 #: has to mean the stock UI specifically - that is what makes a total overwrite
-#: safe, and it is why applying a theme can never leave the previous theme's
-#: dialogs behind.
+#: safe.
 DEFAULT_THEME = "default"
 
 root = Path(__file__).resolve().parent
@@ -131,8 +120,8 @@ backups_dir = root / "backups"
 def config_dir() -> Path:
     """Where TouchDesigner actually keeps the two stores.
 
-    Overridable via the TDTHEME_CONFIG environment variable, which is what
-    the test-suite uses so it never touches the real install.
+    Overridable via TDTHEME_CONFIG, which is how the test-suite avoids the
+    real install.
     """
     return Path(os.environ.get("TDTHEME_CONFIG", TD_CONFIG))
 
@@ -166,16 +155,12 @@ def theme_ui_tox(name: str) -> Path:
 def ui_tox_source(name: str) -> "Path | None":
     """The `ui.tox` a theme installs, or None when there is nothing to install.
 
-    A theme that ships no `ui.tox` of its own falls back to `default`'s, which
-    is the pristine one. The fallback is the whole point rather than a
-    convenience: a theme leaves the install holding the *previous* theme's
-    dialogs if nothing is written, and then `tdtheme list` reports a theme that
-    is not what is on screen. Falling back means "this theme has no opinion
-    about the UI" resolves to the stock UI, so a switch can never leak.
-
-    A theme that does ship one always wins over the fallback, including
-    `default` itself, whose file is a copy of the stock install rather than a
-    reference back to the baseline.
+    A theme shipping no `ui.tox` falls back to `default`'s, the pristine one.
+    That fallback is the point, not a convenience: writing nothing leaves the
+    install holding the *previous* theme's dialogs while `tdtheme list` reports
+    the new one, so "no opinion about the UI" has to resolve to the stock UI. A
+    theme that does ship one always wins over the fallback, `default` included:
+    its file is a copy of the stock install, not a reference to the baseline.
     """
     own = theme_ui_tox(name)
     if own.is_file():
@@ -184,9 +169,7 @@ def ui_tox_source(name: str) -> "Path | None":
     return fallback if fallback.is_file() else None
 
 
-# --------------------------------------------------------------------------
-# Parsing / serialising
-# --------------------------------------------------------------------------
+# Parsing / serialising ----------------------------------------------------
 
 def _split_lines(text: str) -> "tuple[list[str], str, bool]":
     """Split into (lines, terminator, had_trailing_newline)."""
@@ -206,10 +189,9 @@ def _split_lines(text: str) -> "tuple[list[str], str, bool]":
 def parse(raw: bytes) -> "OrderedDict[str, list[str]]":
     """Parse a TouchColors/TouchOptions file into key -> list-of-fields.
 
-    A blank line is preserved rather than skipped, so it round-trips: it
-    appears as the empty key ``""`` with an empty field list. Neither shipped
-    file contains one, but silently dropping a line would be exactly the kind
-    of unrequested change this module exists to prevent.
+    A blank line is preserved as the empty key ``""`` so it round-trips; neither
+    shipped file has one, but dropping a line is exactly the unrequested change
+    this module exists to prevent.
     """
     try:
         text = raw.decode("ascii")
@@ -308,20 +290,15 @@ def write_file(path: Path, raw: bytes) -> None:
             tmp.unlink()
 
 
-# --------------------------------------------------------------------------
-# Overlay (sparse theme) format
-# --------------------------------------------------------------------------
+# Overlay (sparse theme) format --------------------------------------------
 #
-# Emitted form is a deliberately restricted subset of YAML so that it parses
-# identically with or without PyYAML:
+# A deliberately restricted subset of YAML, so both loaders agree: PyYAML when
+# importable (TouchDesigner ships 6.0.3), otherwise a minimal loader handling
+# exactly the subset emitted below. No third-party dependencies either way.
 #
 #   # comment line
 #   key: ["1", "0", "0"]      <- colour stores (always a list)
 #   tile.border.size: "5"     <- option stores (a bare quoted scalar)
-#
-# PyYAML is used when importable (TouchDesigner ships 6.0.3); otherwise a
-# minimal loader handles exactly the subset emitted above. The tool therefore
-# has no third-party dependencies.
 
 def _have_yaml() -> bool:
     try:
@@ -410,9 +387,8 @@ def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]
                 value = json.loads(rest)
             except json.JSONDecodeError as exc:
                 # `json`'s own message ("Expecting value: line 1 column 2") is
-                # accurate and useless to someone writing a theme: the usual
-                # cause is a bare item, `[a, b]`, which is valid YAML and not
-                # valid JSON. Say so, and say what to write instead.
+                # accurate and useless: the usual cause is a bare item, `[a, b]`,
+                # valid YAML but not valid JSON. Say what to write instead.
                 raise FileFormatError(
                     f"{name or 'overlay'}: line {lineno} could not read the "
                     f"list {rest!r}: {exc}. List items must be quoted - write "
@@ -420,13 +396,11 @@ def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]
                 ) from exc
         elif rest.startswith("'"):
             # A YAML single-quoted scalar, which this loader cannot unquote.
-            # Keeping the quotes would write them into the store, so
-            # `origsize: '11'` would install the three characters '11' while
-            # PyYAML installs 11 - the same file behaving differently
-            # depending on which interpreter ran it. Refuse it instead, and
-            # name the two forms that mean the same thing in both loaders.
-            # A value merely *containing* an apostrophe is unaffected: only a
-            # leading quote is ambiguous.
+            # Keeping the quotes writes them into the store, so `origsize: '11'`
+            # would install the three characters '11' where PyYAML installs 11 -
+            # the same file behaving differently per interpreter. Refuse it and
+            # name the two forms both loaders agree on. A value merely
+            # *containing* an apostrophe is fine: only a leading quote is ambiguous.
             inner = rest[1:-1] if rest.endswith("'") and len(rest) > 1 else rest[1:]
             raise FileFormatError(
                 f"{name or 'overlay'}: line {lineno} value is single-quoted: "
@@ -435,19 +409,14 @@ def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]
                 f'write {inner!r} or "{inner}" instead.'
             )
         elif rest[0] in _YAML_ONLY_INDICATORS:
-            # The remaining YAML indicator characters introduce constructs this
-            # loader cannot replicate, so every one of them is a place the two
-            # loaders could silently return different data for the same file.
-            # `{` a flow mapping - kept here as the literal text `{a: 1}`.
-            # `&` an anchor and `*` an alias - kept as the literal `&x`/`*x`,
-            #   where PyYAML resolves the alias and writes the anchored value.
-            # `!` a tag, `|` and `>` block scalars, `%` a directive, `@` and
-            #   backtick reserved indicators.
-            #
-            # Refusing the indicator is the point: a theme has to install the
-            # same bytes whichever interpreter reads it, so an ambiguous value
-            # is an error rather than a guess. Which one it is barely matters -
-            # the value is not one this tool documents, and the message says so.
+            # Constructs the restricted loader cannot replicate, so each is a place
+            # the two loaders could silently return different data for one file -
+            # kept here as literal text where PyYAML would resolve anchors, tags
+            # and block scalars instead. `kind` below names them. Refusing is the
+            # point: a theme must install the same bytes whichever interpreter
+            # reads it, so an ambiguous value is an error rather than a guess. Which
+            # construct it is barely matters - the value is not one this tool
+            # documents, and the message says so.
             kind = {"{": "a flow mapping", "&": "an anchor", "*": "an alias",
                     "!": "a tag", "|": "a block scalar", ">": "a folded scalar",
                     "%": "a directive", "@": "a reserved indicator",
@@ -468,9 +437,7 @@ def _load_overlay_fallback(text: str, name: str) -> "OrderedDict[str, list[str]]
     return data
 
 
-# --------------------------------------------------------------------------
-# Merge / diff
-# --------------------------------------------------------------------------
+# Merge / diff -------------------------------------------------------------
 
 def merge(base: TdFile, overlay: "OrderedDict[str, list[str]]") -> TdFile:
     """Apply a sparse overlay onto a full file. Returns a new TdFile."""
@@ -489,16 +456,14 @@ def diff(base: TdFile, other: TdFile) -> "OrderedDict[str, list[str]]":
     return out
 
 
-# --------------------------------------------------------------------------
-# Validation
-# --------------------------------------------------------------------------
+# Validation ---------------------------------------------------------------
 
 #: Any key that looks like a physical size.
 SIZE_KEY_RE = re.compile(r"(?:\.size|\.origsize)$")
 
 #: Tile geometry specifically. A zero here silently destroys layout:
-#: `tile.inout.origsize 0` collapsed both the connector and the top border,
-#: with no error from TouchDesigner. These are hard errors.
+#: `tile.inout.origsize 0` collapsed both the connector and the top border with
+#: no error from TouchDesigner. Hard errors.
 TILE_GEOMETRY_RE = re.compile(r"^tile\..*\.(?:size|origsize)$")
 
 
@@ -523,20 +488,18 @@ def _is_number(text: str) -> bool:
 def _check_color_fields(target: TdFile, baseline: TdFile) -> "list[Finding]":
     """Catch a colour value whose fields no longer match the shipped shape.
 
-    A real corruption motivated this. A hand-edit wrote `worksheet.grid` as
-    `0.317 0.189 <TAB> 0.15` - two channels merged into one field by a space
-    where a tab belonged. `parse` accepts it without complaint, `serialize`
-    faithfully reproduces it, and the result is a file TouchDesigner cannot
-    read - so the bad value survived being written back out, and `validate`
-    reported nothing at all. Nothing downstream checks field integrity.
+    Motivated by real corruption: a hand-edit wrote `worksheet.grid` as
+    `0.317 0.189 <TAB> 0.15` - two channels merged into one field by a space where
+    a tab belonged. `parse` accepts it, `serialize` reproduces it, and
+    TouchDesigner cannot read the result, so the bad value survived a write and
+    `validate` reported nothing. Nothing downstream checks field integrity.
 
-    Every rule is stated *relative to the baseline* rather than absolutely.
-    An absolute "exactly three numeric fields" would false-positive the two
-    shipped keys that carry a stray empty leading field
-    (`dialog.commenthint`, `dialog.commenthint.comp`), and would break again
-    if a future build changed the shape. Same lesson as the size rule below:
-    a rule that fires on the untouched shipped file is worse than no rule,
-    because it fails every apply and trains the user to pass `--force`.
+    Every rule is relative to the baseline: an absolute "exactly three numeric
+    fields" would false-positive the two shipped keys with a stray empty leading
+    field (`dialog.commenthint`, `dialog.commenthint.comp`) and break again if a
+    future build changed the shape. Same lesson as the size rule below - a rule
+    that fires on the untouched shipped file is worse than no rule, because it
+    fails every apply and trains the user towards `--force`.
     """
     findings: "list[Finding]" = []
     for key, value in target.data.items():
@@ -575,11 +538,11 @@ def _check_color_fields(target: TdFile, baseline: TdFile) -> "list[Finding]":
 def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
     """Check a fully-merged file against the baseline. Errors block the write.
 
-    `baseline` is required, and every rule here is relative to it: a key is
-    judged by what the baseline ships, not by an absolute rule. It used to
-    default to None, which quietly disabled the colour-arity check - the
-    strictest rule in the file - for any caller who forgot it. Making it
-    required turns that silence into a TypeError.
+    `baseline` is required, and every rule is relative to it: a key is judged
+    by what the baseline ships. It used to default to None, which quietly
+    disabled the colour-arity check - the strictest rule in the file - for any
+    caller who forgot it. Making it required turns that silence into a
+    TypeError.
     """
     findings: "list[Finding]" = []
     keys = set(target.data)
@@ -589,14 +552,11 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
         findings += _check_color_fields(target, baseline)
 
     # Only the option store has size keys; a colour store has no geometry.
-    #
-    # The rule is deliberately asymmetric. Tile geometry is a hard error at
-    # zero, because that is a bug class we hit for real. Every other `.size`
-    # key is judged only *relative to the baseline*, because the shipped
-    # `font.relative.size` is legitimately 0 - it is a delta from the base
-    # font size, not an absolute size. An unconditional "> 0" rule produces
-    # a false positive on the untouched shipped file and would make every
-    # single apply fail validation.
+    # Deliberately asymmetric: tile geometry is a hard error at zero, a bug class
+    # we hit for real, while every other `.size` key is judged only *relative to
+    # the baseline*, because the shipped `font.relative.size` is legitimately 0: a
+    # delta from the base font size, not an absolute size. An unconditional "> 0"
+    # rule would false-positive the untouched shipped file.
     if target.name not in COLOR_FILES:
         baseline_values = baseline.data
         for key, value in target.data.items():
@@ -605,14 +565,11 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
             try:
                 number = float(value[0])
             except ValueError:
-                # An error, not a warning. A `.size` field that will not parse
-                # as a number is always a mistake, and it is the shape a
-                # mis-quoted value takes: `origsize: '11'` reaches here as the
-                # three characters '11'. As a warning this sailed through
-                # `apply`, which gates on errors only, and wrote the quotes
-                # into the install. TouchDesigner then reads an unparseable
-                # geometry, which is the layout-destroying failure this whole
-                # check exists to catch.
+                # An error, not a warning: a `.size` that will not parse is
+                # always a mistake, and it is the shape a mis-quoted value
+                # takes - `origsize: '11'` reaches here as three characters
+                # '11'. As a warning it sailed through `apply`, which gates on
+                # errors only, and wrote the quotes into the install.
                 findings.append(Finding(
                     "error", key,
                     f"size is not numeric: {value[0]!r}. If the value is "
@@ -657,9 +614,7 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
     return findings
 
 
-# --------------------------------------------------------------------------
-# TouchDesigner environment
-# --------------------------------------------------------------------------
+# TouchDesigner environment ------------------------------------------------
 
 def td_version() -> "str | None":
     """CFBundleShortVersionString, e.g. '2025.33230'."""
@@ -685,17 +640,14 @@ def td_running() -> "list[int]":
     return pids
 
 
-# --------------------------------------------------------------------------
-# High-level operations
-# --------------------------------------------------------------------------
+# High-level operations ----------------------------------------------------
 
 def _baseline_paths() -> "dict[str, Path]":
     """The baseline store files, and only those.
 
-    Deliberately not the icon directory. `load_baseline` parses every entry
-    here as a TdFile, so adding `Icons` would have it try to read a directory
-    as a text store. The icon set is tracked separately by
-    `baseline_icons_dir()`.
+    Deliberately not the icon directory: `load_baseline` parses every entry here
+    as a TdFile, so `Icons` would be read as a text store. The icon set is
+    tracked separately, by `baseline_icons_dir()`.
     """
     return {name: baseline_dir / name for name in STORE_FILES}
 
@@ -749,12 +701,11 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
     """Snapshot the installed stores as the baseline. Refuses to clobber."""
     paths = _baseline_paths()
     existing = [n for n, p in paths.items() if p.exists()]
-    # The icon set is part of the baseline too, so the guard has to name it.
-    # Otherwise the refusal reads "baseline already exists (TouchColors,
-    # TouchOptions)" and implies the 97 icons are not at stake, when
-    # re-capturing replaces all of them and every theme's `icons diff` is
-    # computed against the result. `ui.tox` is in the same position: re-capturing
-    # replaces it, and it is what `capture` copies out to the baseline.
+    # The icon set is part of the baseline too, so the guard names it. Otherwise
+    # the refusal reads "baseline already exists (TouchColors, TouchOptions)" and
+    # implies the 97 icons are not at stake, when re-capturing replaces all of them
+    # and every theme's `icons diff` is computed against the result. `ui.tox` is in
+    # the same position.
     icons_present = baseline_icons_dir().is_dir()
     ui_tox_present = baseline_ui_tox().is_file()
     if (existing or icons_present or ui_tox_present) and not force:
@@ -782,22 +733,20 @@ def capture(*, force: bool = False) -> "dict[str, Path]":
         write_file(destination, raw)
         written[name] = destination
 
-    # Icons are captured too, but as a side effect rather than as a gate: a
-    # missing or unreadable icon directory must not stop someone baselining
-    # their colours. The test is on the *install* only. Testing
-    # `icons_available()` here instead would be circular - it requires the
-    # baseline directory that this line is about to create, so the very first
-    # capture would silently skip icons and no later capture would fix it.
+    # Icons are captured as a side effect rather than a gate: a missing or
+    # unreadable icon directory must not stop someone baselining their colours.
+    # The test is on the *install* only - `icons_available()` would be circular,
+    # since it needs the baseline directory this line is about to create, so the
+    # very first capture would silently skip icons and no later one would fix it.
     if icons_dir().is_dir():
         written.update(tdicons.capture_icons(icons_dir(), baseline_icons_dir()))
 
-    # Verbatim, like the icons: the point of the baseline copy is to be the file
-    # TouchDesigner shipped, so a hand-edited ui.tox in the install is captured
-    # as-is and is distinguishable from it by hash. Nothing reads this copy - the
-    # fallback for a theme without a ui.tox is `themes/default/ui.tox`, not the
-    # baseline, because the baseline is a reference rather than something to
-    # install. It exists so `capture` does not quietly lose the file and so a
-    # reinstall can be compared against it.
+    # Verbatim, like the icons: the point is to be the file TouchDesigner shipped,
+    # so a hand-edited ui.tox in the install is captured as-is and stays
+    # distinguishable from it by hash. Nothing reads this copy - the fallback for a
+    # theme without a ui.tox is `themes/default/ui.tox`, not the baseline, which is
+    # a reference rather than something to install. It exists so `capture` does not
+    # quietly lose the file and a reinstall can be compared against it.
     if ui_tox_path().is_file():
         baseline_ui_tox().parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ui_tox_path(), baseline_ui_tox())
@@ -831,11 +780,10 @@ def require_theme(name: str) -> None:
     """Raise `ThemeNotFound` unless `name` is a defined theme.
 
     The icon commands need this separately from `_load_theme`: a theme may
-    legitimately have no `Icons/` directory, and "this theme does not theme
-    icons" is a real, reportable state. Without this check, `icons diff` and
-    `icons preview` cannot tell that apart from a typo in the theme name, and
-    quietly answer about the wrong thing - `icons preview` went so far as to
-    write a baseline contact sheet under the mistyped name.
+    legitimately have no `Icons/`, and "does not theme icons" is a real,
+    reportable state. Without the check `icons diff` and `icons preview` cannot
+    tell that from a typo and quietly answer about the wrong thing - `icons
+    preview` once wrote a baseline contact sheet under the mistyped name.
     """
     if name in list_themes():
         return
@@ -856,17 +804,14 @@ def _load_theme(name: str) -> "dict[str, OrderedDict]":
     return overlays
 
 
-# --------------------------------------------------------------------------
-# Icons
-# --------------------------------------------------------------------------
+# Icons --------------------------------------------------------------------
 #
-# Icons are an optional third surface alongside TouchColors and TouchOptions.
-# Every entry point here degrades to a no-op when the icon directory is absent,
-# so a TouchDesigner build without it - or a test fixture that only seeds the
-# two text stores - behaves exactly as it did before icons existed.
+# An optional third surface alongside the two text stores. Every entry point
+# degrades to a no-op when the icon directory is absent, so a build without one -
+# or a test fixture that only seeds the stores - behaves as it did before icons
+# existed.
 
 def icons_available() -> bool:
-    """True when both the install and the baseline have an icon directory."""
     return icons_dir().is_dir() and baseline_icons_dir().is_dir()
 
 
@@ -885,9 +830,9 @@ class IconFinding:
 def icon_diff(name: str) -> "dict[str, str]":
     """How a theme's icon set differs from the baseline, by sha256.
 
-    Empty dict when the theme has no icon directory, which means "this theme
-    does not theme icons" rather than "this theme's icons match". An unknown
-    theme name raises instead - an empty dict is a claim about a real theme.
+    Empty dict means the theme has no icon directory - "does not theme icons",
+    not "icons match". An unknown theme name raises instead: an empty dict is a
+    claim about a real theme.
     """
     require_theme(name)
     theme = theme_icons_dir(name)
@@ -899,20 +844,15 @@ def icon_diff(name: str) -> "dict[str, str]":
 def validate_icons(name: str) -> "list[IconFinding]":
     """Check a theme's icon set before anything is written into the bundle.
 
-    Three failure modes are worth catching here rather than discovering as a
-    missing glyph in the UI:
-
-    - an icon that will not decode, which would leave TouchDesigner unable to
-      read the file at all (it logs "Couldn't find icon" and draws nothing);
-    - an icon whose dimensions changed, because TouchDesigner sizes most of
-      these glyphs from the file and a resized one is visibly wrong;
-    - an icon in the baseline but absent from the theme, which is now filled in
-      from the baseline rather than left as the previous theme left it, so it
-      costs nothing - but it still usually means the theme was generated from a
-      stale baseline, or assembled by hand and interrupted.
-
-    An unknown theme name raises rather than validating nothing, which would
-    read as a clean bill of health.
+    Three failure modes worth catching here rather than as a missing glyph: one
+    that will not decode, leaving TouchDesigner unable to read it at all (it logs
+    "Couldn't find icon" and draws nothing); one whose dimensions changed, since
+    TouchDesigner sizes most of these glyphs from the file and a resized one is
+    visibly wrong; and one in the baseline but absent from the theme, which now
+    costs nothing because it is filled in from the baseline - but still usually
+    means a theme generated from a stale baseline, or assembled by hand and
+    interrupted. An unknown theme name raises rather than validating nothing,
+    which would read as a clean bill of health.
     """
     require_theme(name)
     findings: "list[IconFinding]" = []
@@ -954,9 +894,8 @@ def validate_icons(name: str) -> "list[IconFinding]":
                 "not in the baseline - a new name, or from a different build. "
                 "It will be written, but nothing here can vouch for it."))
 
-    # One finding for the whole shortfall, not one per icon. A theme missing 94
-    # of 97 used to print 94 identical lines, which is not information - it is
-    # a count wearing 94 costumes - and it pushed the actual findings off the
+    # One finding for the whole shortfall, not one per icon: 94 identical lines
+    # is a count wearing 94 costumes, and it pushed the real findings off the
     # screen.
     baseline_names = tdicons.icon_names(baseline)
     missing = [name for name in baseline_names if name not in names]
@@ -971,15 +910,13 @@ def validate_icons(name: str) -> "list[IconFinding]":
 def _icons_source_dir(name):
     """The icon directory a preview should read.
 
-    `name=None` means the baseline. That is not a cosmetic special case: the
-    baseline is the thing every theme is diffed against, so it is the only
-    preview that can answer "did this theme change the icon I think it
-    changed, or was that glyph already like this".
-
-    A *named* theme never falls back to the baseline. It used to, and that was
-    worse than a crash: `preview_icons("typo")` silently rendered the baseline
-    and then wrote it to `typo-icons.png`, so the file name asserted something
-    the contents did not. Say so instead.
+    `name=None` means the baseline, and it is not a cosmetic special case: the
+    baseline is what every theme is diffed against, so it is the only preview
+    that can answer "did this theme change the icon I think it changed, or was
+    that glyph already like this". A *named* theme never falls back. It used to,
+    which was worse than a crash: `preview_icons("typo")` rendered the baseline
+    and wrote it to `typo-icons.png`, so the name asserted something the contents
+    did not.
     """
     if name:
         source = theme_icons_dir(name)
@@ -1000,13 +937,11 @@ def _icons_source_dir(name):
 def preview_icons(name, path=None, *, columns: int = 10, cell: int = 72):
     """Write a PNG contact sheet of a theme's icons. Returns the path written.
 
-    Preview only - the install gets TIFFs. This exists because the whole point
-    of regenerating 97 glyphs is that somebody has to be able to look at them.
-    `name=None` previews the baseline instead.
-
-    Validates the theme name itself rather than trusting the caller, because the
-    output file is named after the theme: a name that does not resolve must
-    never produce a picture.
+    Preview only - the install gets TIFFs. It exists because the point of
+    regenerating 97 glyphs is that somebody has to be able to look at them.
+    `name=None` previews the baseline. The theme name is validated here rather
+    than trusted from the caller, because the output file is named after it: a
+    name that does not resolve must never produce a picture.
     """
     if name is not None:
         require_theme(name)
@@ -1028,13 +963,11 @@ def _apply_icon_set(name: str, backup_dir) -> dict:
     """Write a theme's icons into the install, backing up what it replaces.
 
     Anything the theme does not ship is filled from the baseline, not left as
-    the previously applied theme left it. Both shipped themes and the fallback
-    reach the same place: the install ends up holding a complete set, so it can
-    never be holding a mixture of two themes while `status` reports one.
-
+    the previously applied theme left it, so the install always holds a complete
+    set and never a mixture of two themes while `status` reports one.
     `backup_dir` is `None` when the caller did not ask for a backup, and
-    `tdicons.copy_icons` already reads `backup=None` as "back up nothing", so
-    the no-backup path needs no branch here.
+    `tdicons.copy_icons` reads `backup=None` as "back up nothing", so the
+    no-backup path needs no branch here.
     """
     theme = theme_icons_dir(name)
     if not theme.is_dir():
@@ -1052,26 +985,19 @@ def _apply_icon_set(name: str, backup_dir) -> dict:
 def _apply_ui_tox(name: str) -> dict:
     """Install a theme's `ui.tox`, or `default`'s, over the one in the install.
 
-    Not backed up even when `--backup` is given, and that is deliberate rather
-    than an oversight. `ui.tox` is 1.1 MB and the only thing that ever writes
-    it is `apply` itself - TouchDesigner reads it and never writes it, and a
-    manual export lands wherever the user saved it rather than over the
-    install's copy. So a backup taken at apply time is the outgoing theme's
-    file, which is already in git in that theme's own folder, and at one per
-    apply it would multiply out to hundreds of megabytes of bytes this
-    repository already has.
-
-    The stores and the icon set are backed up only on request, for the same
-    "already in git" reason, so the departure is narrower than it was: it used
-    to be "the stores and icons are always backed up and this is not", and it
-    is now "this one is excluded even from the opt-in backup". The size is
-    what makes `ui.tox` the strongest case rather than a merely consistent
-    one - a store pair is 32 KB against 1.1 MB, so `--backup` is a cheap
-    request there and an expensive one here.
+    Not backed up even under `--backup`, deliberately: 1.1 MB, and the only thing
+    that ever writes it is `apply` itself - TouchDesigner reads it and never writes
+    it, and a manual export lands wherever the user saved it, not over the
+    install's copy. A backup here is the outgoing theme's file, already in git in
+    that theme's own folder, once per apply, of bytes this repository has. The
+    stores and icons are backed up only on request, for the same "already in git"
+    reason; the size makes this the strongest case rather than a merely consistent
+    one, since a store pair is 32 KB against 1.1 MB, so `--backup` is cheap there
+    and expensive here.
 
     The write goes through `write_file`, so it is atomic and creates
-    `Config/System/` if it is somehow absent. Overwriting unconditionally is
-    the whole design: the previous theme's UI must not survive a switch.
+    `Config/System/` if absent. Overwriting unconditionally is the whole design:
+    the previous theme's UI must not survive a switch.
     """
     source = ui_tox_source(name)
     if source is None:
@@ -1085,15 +1011,14 @@ def _apply_ui_tox(name: str) -> dict:
 def store_changes(before: "TdFile", after: "TdFile") -> "dict":
     """What writing `after` over `before` did, as data rather than bytes.
 
-    Two directions, because `diff` only reports keys that are in `after`. An
-    overlay may add a key the baseline does not have - `diff` counts that as a
-    change - so a theme that adds one and a later theme that does not would
-    otherwise drop it silently. That is the same class of leak the icon fill-in
-    exists to prevent, and it deserves to be counted rather than assumed away.
-
-    `before` is the file as installed, not the baseline. An apply reports what
-    *it* changed, so a store the user had drifted by hand shows up here as
-    being corrected, which is the truth about the write that just happened.
+    Two directions, because `diff` only reports keys present in `after`: an
+    overlay may add a key the baseline lacks - which `diff` counts as a change -
+    so a theme that adds one and a later theme that does not would drop it
+    silently. Same class of leak the icon fill-in prevents, and it deserves to be
+    counted rather than assumed away. `before` is the file as installed, not the
+    baseline: an apply reports what *it* changed, so a store the user drifted by
+    hand shows up as being corrected, which is the truth about the write that just
+    happened.
     """
     changed = diff(before, after)
     removed = [key for key in before.data if key not in after.data]
@@ -1115,18 +1040,15 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
           backup: bool = False) -> dict:
     """Merge, validate, and write. Refuses on validation errors.
 
-    `backup` first copies the outgoing stores and icons into
-    `backups/<timestamp>/`. It is off by default, and the reason is that the
-    install is reconstructible without it: the two stores only ever hold
-    `merge(baseline, theme)` and the icon set only ever holds a theme's set
-    completed from the baseline, so both inputs are in git and
-    `apply <the previous theme>` reproduces the outgoing bytes exactly.
-
-    What a backup actually adds is cover for the one input git does not have -
-    a theme edited on disk and not committed - and it is not free, because a
-    set runs 36 KB to 464 KB depending on how much of the install the outgoing
-    theme had changed, and nothing ever pruned `backups/`. So it is a flag
-    rather than a default, and `result["backup"]` is `None` when it is off.
+    `backup` copies the outgoing stores and icons into `backups/<timestamp>/`
+    first. Off by default because the install is reconstructible without it: the
+    stores only ever hold `merge(baseline, theme)` and the icon set only ever
+    holds a theme's set completed from the baseline, so both inputs are in git
+    and `apply <the previous theme>` reproduces the outgoing bytes exactly. What a
+    backup adds is cover for the one input git lacks - a theme edited on disk and
+    not committed - and it is not free: a set runs 36 KB to 464 KB depending on
+    how much the outgoing theme had changed, and nothing ever pruned `backups/`.
+    Hence a flag, and `result["backup"]` is `None` when it is off.
     """
     result = plan(name)
     findings = result["findings"]
@@ -1141,10 +1063,9 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
 
     cfg = config_dir()
     running = td_running()
-    # TouchDesigner reads both stores at startup, so a running instance keeps
-    # showing the old appearance until it is restarted. That is a display
-    # lag, not data loss: there is no evidence TouchDesigner ever writes these
-    # files back, so editing them while it runs is safe. See README.
+    # TouchDesigner reads both stores at startup, so a running instance shows the
+    # old appearance until restart. A display lag, not data loss: no evidence
+    # TouchDesigner ever writes these back. See README.
     warnings = []
     if running:
         warnings.append(
@@ -1163,10 +1084,10 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
             if installed.exists():
                 shutil.copy2(installed, backup_dir / store)
 
-    # Read what is about to be overwritten, because the report is about what
-    # this apply changed rather than what the theme's overlay contains. The
-    # latter is `tdtheme diff`. Both reads happen before either write, so the
-    # comparison is against the pre-apply state even if a write fails later.
+    # Read what is about to be overwritten: the report is about what this apply
+    # changed, not what the overlay contains (that is `tdtheme diff`). Both reads
+    # precede both writes, so the comparison is against the pre-apply state even
+    # if a write fails later.
     for store in STORE_FILES:
         installed = cfg / store
         if installed.exists():
@@ -1183,8 +1104,8 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
     elif icons:
         icon_result["reason"] = f"no icon directory at {icons_dir()}"
 
-    # Always, and regardless of --no-icons: that flag is about the icon set, and
-    # a theme switch that skipped the UI would leave the previous theme's dialog
+    # Always, and regardless of --no-icons: that flag is about the icon set, and a
+    # theme switch that skipped the UI would leave the previous theme's dialog
     # sizes on screen while reporting the new theme.
     ui_result = _apply_ui_tox(name)
 
@@ -1225,9 +1146,8 @@ def status() -> Status:
         except ThemeError:
             baseline_present = False
 
-    # Icons drift as a set rather than a count of changed keys, but the
-    # "how many files differ" number is the same idea, so it is reported the
-    # same way and keyed under the directory name.
+    # Icons drift as a set, not a count of changed keys, but "how many files
+    # differ" is the same idea, keyed by directory name.
     icon_drift: "dict[str, int]" = {}
     icons_installed: "list[str]" = []
     if baseline_icons_dir().is_dir():
