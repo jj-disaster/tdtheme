@@ -1073,6 +1073,103 @@ check(not [ln for ln in no_backup_output.getvalue().splitlines()
            if "backup:" in ln.lower()],
       f"and prints no backup line at all ({no_backup_output.getvalue()!r})")
 
+# -------------------------------------------- a theme need not change any icons
+# Recolouring a palette does not require redrawing the glyphs, so "this theme
+# ships no icons" is a legitimate thing to want to express. It has two spellings
+# on disk - an empty Icons/ directory, or no directory at all - and they now mean
+# the same thing: the baseline supplies the whole set.
+#
+# Both used to be wrong, in opposite directions. The empty directory was a hard
+# error, on the stated grounds that applying it "would be a no-op", which was
+# false: the fill installs all 97 from the baseline. And the missing directory
+# was not an error at all, just `return` before the fill, so the previously
+# applied theme's glyphs stayed installed while `status` reported the new theme.
+# The second is the worse one, and it is the state leak `fill_from` was added to
+# prevent - the same leak `default`'s ui.tox prevents on the other side.
+for _spelling in ("empty", "absent"):
+    _icons = T.themes_dir / "default" / "Icons"
+    if _icons.exists():
+        shutil.rmtree(_icons)
+    if _spelling == "empty":
+        _icons.mkdir(parents=True)   # what Finder and a half-finished export leave
+
+    # Start from a themed icon set, so "the baseline won" is a real change and
+    # not a coincidence of the install already being stock.
+    make_dirty()
+    shutil.rmtree(install_icons, ignore_errors=True)
+    shutil.copytree(baseline_icons, install_icons)
+    for _n in DRIFTED_ICONS:
+        (install_icons / _n).write_bytes(b"the previous theme's glyph")
+
+    try:
+        _result, _refused = T.apply("default"), None
+    except T.ValidationError as exc:
+        # Caught rather than allowed to propagate. Against the old code the
+        # empty directory raised here, and an uncaught exception aborts the
+        # whole file: every check after this one silently stops running, so a
+        # reader sees a traceback instead of which property broke, and a
+        # future refactor that swallowed the raise would report success.
+        _result, _refused = None, str(exc)
+    _wrong = [n for n in sorted(p.name for p in baseline_icons.glob("*.tiff"))
+              if (install_icons / n).read_bytes() != (baseline_icons / n).read_bytes()]
+    _detail = _refused or f"{len(_wrong)} icon(s) are not the baseline's bytes"
+    check(_refused is None and not _wrong,
+          f"a theme with an {_spelling} Icons/ directory applies, and the "
+          f"baseline supplies all {BASELINE_ICON_COUNT} ({_detail})")
+
+    check(_result is not None and _result["icons"]["applied"]
+          and len(_result["icons"]["filled"]) == BASELINE_ICON_COUNT,
+          f"and the {_spelling} directory is reported as filled, not skipped")
+    shutil.rmtree(_icons, ignore_errors=True)
+
+# The two spellings have to agree, or "ships no icons" means two different
+# things depending on which one a tool happened to leave behind.
+_empty = T.themes_dir / "default" / "Icons"
+check(not _empty.exists(), "test: the theme ships no icons for the next check")
+
+# --no-icons is the way to genuinely leave the icon set alone, and it has to
+# stop saying the icons came from the baseline, because none were written at all.
+# The finding used to be reported anyway, and once "ships no icons" became a
+# supported state that line read "0 written, the other 97 are from baseline" on a
+# run that wrote nothing and took nothing from anywhere.
+shutil.rmtree(install_icons)
+shutil.copytree(baseline_icons, install_icons)
+(install_icons / DRIFTED_ICONS[0]).write_bytes(b"left alone on purpose")
+with contextlib.redirect_stdout(io.StringIO()) as _skipped:
+    _code = tdtheme_cli.main(["apply", "default", "--no-icons"])
+check(_code == 0 and (install_icons / DRIFTED_ICONS[0]).read_bytes()
+      == b"left alone on purpose",
+      "apply --no-icons really does leave the icon set alone")
+check(not [f for f in T.apply("default", icons=False)["icon_findings"]],
+      "and reports no icon findings for a set it did not write")
+check([f for f in T.apply("default")["icon_findings"]],
+      "while a normal apply still reports where its icons came from")
+
+# Leave the install stock for the sections that follow, which assume it. Done
+# here, and by writing the bytes rather than by applying `default`, so that a
+# failure in *this* section stays a failure in this section. Restoring through
+# `apply` does not work: the theme under test is the one shipping no icons, so
+# against the old code the restore itself left the previous theme's glyphs in
+# place, and four unrelated checks downstream failed as a consequence - which
+# reads as four bugs rather than one.
+for _store in T.STORE_FILES:
+    (install / _store).write_bytes(STOCK[_store])
+shutil.rmtree(install_icons, ignore_errors=True)
+shutil.copytree(baseline_icons, install_icons)
+check(installed_state() == STOCK,
+      "test: the install is stock again for the sections that follow")
+
+# And put the *theme* back, which matters more. This section edits the shared
+# `default` theme to make it ship no icons, and a later section restores the
+# install with `T.apply("default")` - so leaving the theme modified makes that
+# restore a no-op against broken code, and four unrelated checks downstream fail
+# for a reason that has nothing to do with them.
+shutil.copytree(PROJECT / "themes" / "default" / "Icons",
+                T.themes_dir / "default" / "Icons")
+check(len(list((T.themes_dir / "default" / "Icons").glob("*.tiff")))
+      == BASELINE_ICON_COUNT,
+      "test: and the shared default theme ships its icons again")
+
 make_dirty()
 with contextlib.redirect_stdout(io.StringIO()) as backup_output:
     code = tdtheme_cli.main(["reset", "--backup"])

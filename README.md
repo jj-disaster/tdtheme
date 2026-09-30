@@ -494,14 +494,30 @@ what you have currently set in TouchDesigner as a new theme, use
 The 97 glyphs in `Config/Icons/` are themed too, and they work differently from
 the two stores.
 
-**They are not a sparse overlay.** Every theme but `defaultnowarn` ships a
-*complete* icon set, and that is deliberate. (`defaultnowarn` ships one icon,
-1,354 B, and leans on the fill described below.) A theme with no `Icons/`
-directory would write nothing, so applying `sunset` and then `default` would
-leave sunset's icons in the install while claiming to be stock. A total
-overwrite is the only model where switching
-themes cannot leak state. The cost is disk - 1.31 MB across the seven shipped
-sets, against a few KB for a delta scheme - and that was an accepted trade.
+**They are not a sparse overlay, and a theme cannot leak another theme's
+glyphs.** `apply` always installs a whole set: whatever the theme ships, and for
+every name it does not, the baseline's copy. So applying `sunset` and then
+`default` cannot leave sunset's icons in the install while claiming to be
+stock. A total overwrite is the only model where switching themes cannot leak
+state.
+
+That also means **a theme does not have to change any icons.** Recolouring a
+palette does not require redrawing the glyphs, so a theme can ship a partial
+set or none at all, and take the rest from the baseline. Both spellings of "none"
+work, and mean the same thing: an empty `Icons/` directory, and no directory at
+all. `defaultnowarn` is the shipped example of the partial case — one icon,
+1,354 B, and 96 filled in.
+
+It used to be an error, on the grounds that applying an empty directory "would be
+a no-op". That was backwards: filling from the baseline is as far from a no-op as
+this tool gets. And a theme with *no* directory was worse than the error — it
+skipped the fill entirely, so the previously applied theme's glyphs stayed
+installed while `status` reported the new theme. If you genuinely want the icon
+set left alone, `tdtheme apply --no-icons` says so out loud.
+
+The cost of shipping full sets is disk: 1.31 MB across the seven shipped sets,
+against a few KB for a delta scheme, which was an accepted trade. A theme that
+ships no icons now costs nothing at all and still gets the total overwrite.
 
 That 1.31 MB is 1 368 702 B, of which 782 520 B is `default` alone, because it
 copies the baseline verbatim. The six regenerated sets are 101-128 KB each
@@ -870,8 +886,9 @@ baseline/               captured pristine files + Icons/ + System/ui.tox
                         + version.json
 baseline.local/         optional, gitignored; `capture --local` writes here
                         and it shadows baseline/ when it exists
-themes/<name>/          TouchColors.yaml, TouchOptions.yaml, Icons/ (a full
-                        set), and optionally ui.tox
+themes/<name>/          TouchColors.yaml, TouchOptions.yaml, and optionally
+                        Icons/ and ui.tox. A theme may ship no Icons/ at all;
+                        apply fills the set from the baseline either way
   backups/<timestamp>/    only with `apply --backup`; off by default, see below
 testiconsforagents/     PNG contact sheets written by `icons preview`
 tests/                  round-trip gate + library tests + icon tests
@@ -953,6 +970,7 @@ above is the thing to read first.
 - **[docs/icon-storage-design.md](docs/icon-storage-design.md)** — **a design
   note, partly implemented.** It proposes storing icon sets sparsely instead of
   shipping all 97 files per theme, and records the measurements behind the idea.
-  Step 1 is built: a theme may ship a subset, and `tdicons.copy_icons` fills
-  the rest from the baseline. Steps 2–5 are still a proposal. Where it
+  Step 1 is built, and has been extended past its own wording: a theme may ship
+  a subset, and may ship no `Icons/` at all, and `tdicons.copy_icons` fills the
+  rest from the baseline either way. Steps 2–5 are still a proposal. Where it
   disagrees with the code, the code is the current behaviour.

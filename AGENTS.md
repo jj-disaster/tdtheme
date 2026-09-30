@@ -328,12 +328,60 @@ The line still prints when `--backup` is given, and it names the set it wrote.
   recipe-writing importer, and the two `match`/recolour footguns. One of those
   steps was written as "stop treating a missing icon as a warning" and **did not
   happen** - the direction went the other way, and the warning is deliberate.
-- **A theme ships all 97 icons, and `apply` fills the rest from the baseline.**
-  Six of the seven themes ship all 97, but `defaultnowarn` ships exactly one -
-  `WarnFace.tiff`, 1,354 B - and leans on the fill for the other 96, so the
-  second half is load-bearing *right now* rather than hypothetically: drop
-  `fill_from` and that theme installs 1 icon instead of 97, silently. Both halves
-  are load-bearing, and the second looks redundant next to the
+- **A theme may ship no icons at all, and `apply` fills the whole set from the
+  baseline.** Recolouring a palette does not require redrawing the glyphs, so
+  "ships no icons" is a legitimate authoring state, in both spellings: an empty
+  `Icons/` directory and no directory at all. They now mean the same thing, and
+  the fill is what makes them the same thing.
+
+  **Both spellings were wrong, in opposite directions, and the quieter one was
+  the worse.** The empty directory was a hard error, refused with the reasoning
+  that applying it "would be a no-op" — which was false, and backwards: filling
+  from the baseline is as far from a no-op as this tool gets. A missing
+  directory was not an error at all; `_apply_icon_set` returned before the fill,
+  so the previously applied theme's glyphs stayed installed while `status`
+  reported the new theme. That is the exact state leak `fill_from` was added to
+  prevent, reproduced by the simplest possible theme, and it is the same leak
+  `default`'s `ui.tox` prevents on the other side of the install. Do not
+  "optimise" the missing-directory branch back into an early return; that branch
+  is where the leak came from.
+
+  `--no-icons` is the way to genuinely leave the icon set alone, and it is why
+  none of the above needs a flag. It also suppresses the icon *findings*, because
+  they describe a set that is not being written: with "ships no icons" now a
+  supported state, `--no-icons` would otherwise print "0 written, the other 97
+  are from baseline" on a run that wrote nothing and took nothing from anywhere.
+  Cleared in `apply`'s return, not at the three places `cli.py` reads it, so
+  there is one answer and not three.
+
+  `tests/test_tdtheme.py` drives both spellings from a deliberately themed
+  install and asserts all 97 end up as the baseline's own bytes — the failure
+  mode is a *silent* wrong answer, so checking that the command exited 0 proves
+  nothing. Two things about that section are worth keeping. It catches
+  `ValidationError` rather than letting it propagate, because an uncaught
+  exception aborts the whole file and every later check silently stops running.
+  And it restores the shared `default` theme **and** the install afterwards, by
+  writing bytes rather than by calling `apply`, because a later section restores
+  the install with `T.apply("default")` — leaving the theme modified made that a
+  no-op against broken code and turned one bug into four unrelated-looking ones.
+
+  **Do not extend the fallback to `preview_icons`.** A theme that ships no icons
+  still raises there, and that asymmetry is deliberate and pinned in
+  `test_icons.py`. A contact sheet written to `<name>-icons.png` is a claim about
+  that theme's icons; answering with the baseline's makes the file a lie a reader
+  cannot detect, and a PNG has nowhere to put "97 of these came from the
+  baseline". `apply` substitutes loudly, in a line that says so. The same
+  reasoning keeps `icons list <name>` from listing the baseline's set under the
+  theme's name. The `icons diff` message *was* rewritten, because it stated the
+  old leak as fact — "the install keeps whatever it has" — and a message that
+  describes behaviour you have just removed is worse than no message.
+
+- **Every shipped theme still ships all 97 icons, and `defaultnowarn` ships
+  exactly one.** `WarnFace.tiff`, 1,354 B, and it leans on the fill for the other
+  96, so the second half is load-bearing *right now* rather than
+  hypothetically: drop `fill_from` and that theme installs 1 icon instead of 97,
+  silently. Both halves are load-bearing, and the second looks redundant next to
+  the
   first, so it is the first thing to get "simplified" away. `copy_icons` takes
   `fill_from=baseline_icons_dir()`; without it `apply` was only a total
   overwrite while every set happened to be complete, and a partial set left the

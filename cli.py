@@ -550,7 +550,22 @@ def cmd_icons(args) -> int:
 
 
 def _icons_list(args) -> int:
-    source = T.theme_icons_dir(args.name) if args.name else T.baseline_icons_dir()
+    if args.name:
+        T.require_theme(args.name)
+        source = T.theme_icons_dir(args.name)
+        if not source.is_dir():
+            # A theme that ships no icons is a legal state - `apply` takes all
+            # the icons from the baseline - so this is not an error any more.
+            # It is also not a request to list the baseline instead: a listing
+            # headed by this theme's name would be a claim about that theme's
+            # icons, and the baseline's are not its. Say what is true and name
+            # the thing that does list them.
+            print(f"Theme {args.name!r} ships no icons, so there is no set of "
+                  f"its own to list. Applying it takes the baseline's "
+                  f"{len(tdicons.icon_names(T.baseline_icons_dir()))} icons.")
+            return EXIT_OK
+    else:
+        source = T.baseline_icons_dir()
     if not source.is_dir():
         print(f"No icon directory at {source}", file=sys.stderr)
         return EXIT_ERROR
@@ -571,8 +586,13 @@ def _icons_diff(args) -> int:
     T.require_theme(args.name)
     directory = T.theme_icons_dir(args.name)
     if not directory.is_dir():
-        print(f"Theme {args.name!r} has no icon directory, so it does not "
-              f"theme icons. The install keeps whatever it has.")
+        # It used to say "the install keeps whatever it has", which described the
+        # old behaviour accurately and this one not at all: the install is filled
+        # from the baseline, so the previous theme's glyphs do not survive. A
+        # message that states the leak as a fact is worse than no message - it
+        # tells a reader to expect glyphs that will not be there.
+        print(f"Theme {args.name!r} ships no icons, so it changes none. The "
+              f"install gets the baseline's set, not the previous theme's.")
         return EXIT_OK
 
     total = len(tdicons.icon_names(directory))

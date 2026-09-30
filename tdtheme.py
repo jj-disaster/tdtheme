@@ -935,17 +935,20 @@ def validate_icons(name: str) -> "list[IconFinding]":
     require_theme(name)
     findings: "list[IconFinding]" = []
     theme = theme_icons_dir(name)
-    if not theme.is_dir():
-        return findings
-
     baseline = baseline_icons_dir()
+
+    # A theme that ships no icons is a legitimate authoring state - recolouring
+    # the palette does not require redrawing the glyphs - and it means the same
+    # thing in both spellings: no Icons/ directory, or an empty one. An empty
+    # directory is what Finder and a half-finished export leave behind.
+    #
+    # An empty one used to be a hard error, on the stated grounds that applying
+    # it "would be a no-op". That was false, and the fill below is what makes it
+    # false: applying it installs the baseline's whole set, which is as far from
+    # a no-op as this tool gets. The shortfall finding at the end is the right
+    # home for this, because it already covers a genuinely partial set and says
+    # the same useful thing - how much came from where.
     names = tdicons.icon_names(theme)
-    if not names:
-        findings.append(IconFinding(
-            "error", ICONS_DIRNAME,
-            f"{theme} contains no .tiff files. Applying it would be a no-op; "
-            f"delete the directory or rebuild it."))
-        return findings
 
     for icon_name in names:
         path = theme / icon_name
@@ -995,14 +998,24 @@ def _icons_source_dir(name):
     which was worse than a crash: `preview_icons("typo")` rendered the baseline
     and wrote it to `typo-icons.png`, so the name asserted something the contents
     did not.
+
+    A theme that genuinely ships no icons is a legal state now - applying it
+    takes all 97 from the baseline - and it still raises here, which reads as
+    inconsistent. It is deliberate: a contact sheet written to
+    `<name>-icons.png` is a claim about that theme's icons, and answering with
+    the baseline's makes the file a lie that a reader cannot detect. `apply`
+    substitutes the baseline loudly, in a line that says 97 came from it; a PNG
+    has nowhere to put that. `tests/test_icons.py` pins this.
     """
     if name:
         source = theme_icons_dir(name)
         if not source.is_dir():
             raise ThemeError(
-                f"theme {name!r} has no {ICONS_DIRNAME}/ directory to preview. "
-                f"Generate one with tdthememaker: "
-                f"`python3 -m tdthememaker.cli build {name}`."
+                f"theme {name!r} ships no icons, so it has no "
+                f"{ICONS_DIRNAME}/ directory to preview - not a missing one, "
+                f"simply none. Preview the baseline set instead: "
+                f"`tdtheme icons preview` (no name). Generate icons for it with "
+                f"tdthememaker: `python3 -m tdthememaker.cli build {name}`."
             )
         return source
     baseline = baseline_icons_dir()
@@ -1046,11 +1059,16 @@ def _apply_icon_set(name: str, backup_dir) -> dict:
     `backup_dir` is `None` when the caller did not ask for a backup, and
     `tdicons.copy_icons` reads `backup=None` as "back up nothing", so the
     no-backup path needs no branch here.
+
+    A theme that ships none at all gets the baseline's whole set, which is what
+    "ships none" has to mean. It used to return early and leave the install
+    exactly as the previous theme had left it, so `apply bnw` then `apply pink`
+    ended with bnw's glyphs on screen and `status` reporting pink - the same
+    state leak the fill exists to prevent, and the same one `default`'s ui.tox
+    prevents on the other side of the install. `tdtheme apply --no-icons` is how
+    a user genuinely leaves the icon set alone.
     """
     theme = theme_icons_dir(name)
-    if not theme.is_dir():
-        return {"applied": False, "reason": f"{name} has no icon directory",
-                "written": [], "unchanged": [], "filled": [], "backed_up": 0}
     result = tdicons.copy_icons(theme, icons_dir(),
                                 backup=None if backup_dir is None
                                 else backup_dir / ICONS_DIRNAME,
@@ -1313,7 +1331,14 @@ def apply(name: str, *, force: bool = False, icons: bool = True,
         "backup": backup_dir,
         "changes": changes,
         "findings": findings,
-        "icon_findings": icon_findings,
+        # Icon findings describe an icon set that is about to be written. With
+        # --no-icons nothing is written, so reporting on it is noise at best -
+        # and now that "ships no icons" is a supported state it is worse than
+        # noise, because the shortfall line would read "0 written, the other 97
+        # are from baseline" on a run that wrote nothing and took nothing from
+        # the baseline. Cleared here rather than at the three places the CLI
+        # reads it, so there is one answer and not three.
+        "icon_findings": icon_findings if icons else [],
         "icons": icon_result,
         "ui_tox": ui_result,
         "warnings": warnings,
