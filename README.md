@@ -262,8 +262,12 @@ guessing:
 
 It only ever fast-forwards, so it never creates a commit you did not ask for.
 
-An update does not change what is installed. A new upstream theme is a new
-theme: it is not on your machine until you `apply` it.
+An update does not change what is installed. It tells you whether the pull left
+it that way: if the pull changed `baseline/` or `themes/` — the only two things
+the install is built from — it says so and asks you to re-apply, and if it only
+changed docs or tests it says the install is still correct and needs nothing.
+A pull that only moves documentation is the common case, and being told a new
+theme had arrived each time is how a reader learns to skip the line that matters.
 
 ### Removing it
 
@@ -277,10 +281,14 @@ by hand-editing four undocumented files.
 
 **The checkout is not deleted.** It holds your themes, and a command whose name
 reads like "remove this program" should not be the thing that deletes them. It
-prints the directory and the `rm -rf` for it, and leaves that decision to you —
-including whether to keep `baseline.local/`.
+prints the directory and the `rm -rf` for it — quoted, so it survives a path with
+a space in it — and leaves that decision to you, including whether to keep
+`baseline.local/`.
 
-`--keep-files` removes the commands but leaves TouchDesigner themed as it is now.
+`--keep-files` removes the commands but leaves TouchDesigner themed as it is now,
+and says that it did. It does not claim the install went to stock, because it did
+not: you asked to keep the files, and a line saying otherwise is worse than no
+line at all.
 
 ### Looking at the icons
 

@@ -192,7 +192,14 @@ failure to restore therefore leaves the links alone rather than proceeding.
 **The checkout is never deleted.** It holds the user's themes, and a command
 named "uninstall" deleting them is a data-loss trap with a friendly name. The
 `rm -rf` is printed and the decision is left to the user. `--keep-files` inverts
-the restore step, which is the one flag that does.
+the restore step, which is the one flag that does — so every line about what
+happened to the install is conditional on it. The closing paragraph and the
+failure path both used to say "TouchDesigner is back to stock" and "the install
+is stock either way" unconditionally, which told a user who deliberately kept
+their theme that the tool had just thrown it away. The behaviour was always
+right and only the message was wrong, which is why every existing check passed:
+none of them looked at stdout. `tests/test_tdtheme.py` now asserts the absence of
+the claim, not just the presence of the truth.
 
 `update` is `git pull --ff-only` with two refusals before it: uncommitted changes,
 and a diverged branch. Both are the same principle as `apply` refusing unknown
@@ -212,6 +219,32 @@ and after) rather than trusting the command's own message — that assertion is
 what caught this, and it is why two of the four failures while building this were
 fixture mistakes rather than code.
 
+**The seeding above was committed as `git add -A` in the scratch checkout, and
+that does not do what the comment says.** `work` is a *different* checkout of
+`PROJECT`'s HEAD, so `git add -A` run there only ever sees `work` — it cannot
+see an uncommitted edit in `PROJECT` and staged nothing. Committing the code
+first hid this completely, because the committed and working copies were then the
+same file. The trap reopened as soon as the next fix was made and *not* committed
+before running the suite, and the symptom was identical to the original: a check
+failing against correct code. It is now a real copy of `git ls-files` from
+`PROJECT` into `work`, file by file, before the `add -A`. Tracked files only, so
+the 2.2 MB `baseline.local/` and `backups/` are not dragged into the scratch
+upstream. **Committing before running the suite is not a fix for this and will
+hide it again.**
+
+**Divergence is asked *after* the pull, and moving that question earlier silently
+disables it.** `@{upstream}` is the *remote-tracking ref*, so until something has
+fetched it still names what the remote was at clone time: a checkout one commit
+ahead and one behind reads as `1  0`, which is not diverged, and the check answers
+"no". `git pull` fetches before it refuses, so the failure branch is the first
+moment the answer exists. `--ff-only` cannot have written anything by then. This
+cost a full debugging cycle because the manual reproduction *passed* — the
+reproduction had already run a failed update, which had fetched, so the ref was
+current. The check is driven through a stubbed `_git` in `tests/test_tdtheme.py`
+for exactly this reason: nothing in the command's real output distinguishes
+"asked git a question" from "matched git's wording", because both print the same
+advice whenever git cooperates.
+
 **Two more, both in the same area, both from assuming rather than reading:**
 
 - **`_git` returns `(returncode, stdout, stderr)`.** The caller unpacked it as
@@ -223,7 +256,15 @@ fixture mistakes rather than code.
   removing `realpath` to fix that broke the reverse case: macOS puts `/private`
   in front of everything under `/var`, and `T.root` is resolved while a link
   target read from `PATH` is not. **Both sides must go through the same
-  `realpath`**, and the dedup is a `set()`, not a comparison.
+  `realpath`**, and the dedup is a `set()`, not a comparison. The same `/private`
+  asymmetry is why the `rm -rf` test compares against `spacey.resolve()` and not
+  `spacey`: a mismatch there is the prefix, not a quoting bug.
+- **Intersect on the top-level directory, not the whole path.** Deciding whether
+  a pull affects the install compared `themes/default/TouchColors.yaml` against
+  `{"themes", "baseline"}`, which is empty — so a pull that changed a theme
+  reported that nothing affecting the install had changed and told the user *not*
+  to re-apply a theme that had just moved underneath them. `_touched_roots`
+  exists for this. The failure is silent and confident in both directions.
 
 ## "Is it on PATH" and "does it run" are different questions
 
@@ -313,7 +354,14 @@ The line still prints when `--backup` is given, and it names the set it wrote.
   authoring-only. Applying a theme only ever needs to read.
 - **The four test scripts are plain scripts**, not a framework. Run them
   directly; each exits non-zero on failure. Run all four after any change, and
-  run `tests/test_tdtheme.py` under TouchDesigner's interpreter too.
+  run `tests/test_tdtheme.py` under TouchDesigner's interpreter too. The fourth
+  lives somewhere else entirely — `tdthememaker/tests/test_thememaker.py` — and
+  a tally of "80 + 25 + 300" is only three of them. That is not pedantry: pink
+  shipping no icons broke the fourth suite and nothing noticed for a whole
+  session, because the number being quoted did not include it. It now skips a
+  theme that ships no icon set at all, for the same reason it already skipped a
+  theme with no ops: there is nothing rendered to assert. Four themes with ops
+  ship icons and are still checked.
 - **Every name in an `__all__` must resolve.** After deleting a symbol, a stale
   `__all__` entry makes `from tdicons import *` raise `AttributeError`, which no
   other test catches. Verify by importing each module and resolving `__all__`.

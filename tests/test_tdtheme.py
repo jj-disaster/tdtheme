@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1548,6 +1549,22 @@ subprocess.run(["git", "-C", str(work), "checkout", "-q", "-B", "main", "FETCH_H
 # uncommitted file is not exercised at all - which is exactly what happened: the
 # clone fast-forwarded correctly and still printed "Already up to date", because
 # the old return-order bug was the code actually running.
+#
+# Copying the tracked files by hand is the part that was missing. `git add -A`
+# run in `work` only ever sees `work`, which is a *different checkout* of
+# PROJECT's HEAD - so with the edit uncommitted it staged nothing and the clone
+# under test ran the old committed code again. Committing first hid that, and
+# then a new check failed against correct code, which is the same fixture problem
+# wearing a different hat. Tracked files only, so nothing gitignored (the 2.2 MB
+# baseline.local, backups/) is dragged into the scratch upstream.
+_tracked = subprocess.run(["git", "-C", str(PROJECT), "ls-files"],
+                          capture_output=True, text=True, check=True).stdout.split()
+for _rel in _tracked:
+    _src, _dst = PROJECT / _rel, work / _rel
+    if not _src.is_file():
+        continue
+    _dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_src, _dst)
 subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
 # --allow-empty so this succeeds whether or not the working tree differed, which
 # depends on whether cli.py happens to be committed at the time the suite runs.
@@ -1602,12 +1619,55 @@ check(was in r.stdout and now in r.stdout,
 check("Already up to date" not in r.stdout,
       "and does not claim there was nothing to do")
 
-# Already current: the message is different and must not claim a move.
+# Already current: the message is different and must not claim a move. This sits
+# above the two cases below because they push new upstream commits, which would
+# leave `behind` behind again and make a second update do real work.
 r = run_in(behind, ["update"])
 check(r.returncode == 0 and "Already up to date" in r.stdout,
       f"a second run says there is nothing to do ({r.returncode})")
 check(was not in r.stdout.split("Already up to date")[0],
       "and does not invent a version change")
+
+# What the pull changed decides what it says. The message used to announce a new
+# upstream theme after *every* fast-forward, including one that only moved docs -
+# which is noise on the common case, and a reader who sees it often learns to
+# skip the line that matters.
+docsy = clone_to("up-docs")
+subprocess.run(["git", "-C", str(work), "commit", "-q", "--allow-empty",
+                "-m", "docs: a sentence"], check=True)
+subprocess.run(["git", "-C", str(work), "push", "-q", str(upstream), "main"], check=True)
+r = run_in(docsy, ["update"])
+check(r.returncode == 0 and "Updated" in r.stdout,
+      f"a docs-only pull still reports the move ({r.returncode}: "
+      f"{r.stderr.strip()[:60]})")
+check("needs no re-apply" in r.stdout,
+      f"and says the install is still correct, so no re-apply is needed "
+      f"({r.stdout.strip()[:70]!r})")
+check("A new upstream theme" not in r.stdout,
+      "and does not claim a theme arrived when only docs did")
+
+# And the other direction: a pull that does change the baseline or a theme is
+# the case the re-apply line exists for, and it must not be the one that gets
+# suppressed as noise. This is where the path matching has to be by directory
+# rather than by whole path - `themes/default/TouchColors.yaml` against
+# {"themes"} is empty, and the first version of this answered "nothing affects
+# the install" for exactly that pull, telling the user not to re-apply a theme
+# that had just changed underneath them.
+touchy = clone_to("up-theme")
+_themed = work / "themes" / "default" / "TouchColors.yaml"
+_themed_before = _themed.read_bytes()
+_themed.write_bytes(_themed_before + b"\n# a comment the test added\n")
+subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+subprocess.run(["git", "-C", str(work), "commit", "-q", "-m",
+                "theme: touch a shipped theme"], check=True)
+subprocess.run(["git", "-C", str(work), "push", "-q", str(upstream), "main"], check=True)
+_themed.write_bytes(_themed_before)   # undo, so the scratch upstream is unchanged
+r = run_in(touchy, ["update"])
+check(r.returncode == 0 and "Re-apply to pick that up" in r.stdout,
+      f"a pull that touches a theme does ask for a re-apply "
+      f"({r.stdout.strip()[:70]!r})")
+check("needs no re-apply" not in r.stdout,
+      "and does not claim the install is still correct when a theme changed")
 
 # Diverged: both sides moved, so there is no fast-forward. Resolving a merge on
 # the user's behalf is exactly the thing that produces a conflict they have no
@@ -1622,6 +1682,74 @@ r = run_in(diverge, ["update"])
 check(r.returncode != 0, f"update refuses when the branches diverged ({r.returncode})")
 check("rebase" in r.stderr or "merge" in r.stderr,
       "and explains that there is no fast-forward")
+# The refusal is its own check, not git's error leaking through. It used to be
+# found by looking for the word "diverging" in git's stderr, so it only ever
+# worked while git happened to use that word; when it stopped, the user got the
+# raw git error and none of the advice that makes it actionable. The counts are
+# the proof that this stopped working and stayed working: they are produced by
+# asking git, and no wording of its answer is involved.
+check("commit(s) here" in r.stderr and "upstream)" in r.stderr,
+      f"and the diagnosis is a question asked of git, not a phrase matched in "
+      f"its error text ({r.stderr.strip()[:70]!r})")
+# The pull is attempted before the question is asked, and that is deliberate:
+# `@{upstream}` is the remote-tracking ref, so until something has fetched it, a
+# checkout that is one commit ahead and one behind reads as "1 ahead, 0 behind"
+# and the check answers "not diverged". The first version asked too early, was
+# silently dead for exactly that reason, and the only symptom was this raw git
+# error coming back. So the property worth pinning is that the advice survives
+# the failure, not that git was never asked to pull.
+check("both moved on" in r.stderr and "git rebase" in r.stderr,
+      f"and still explains it in the tool's own words ({r.stderr.strip()[:70]!r})")
+
+# And that the explanation does not depend on git's wording, which is the part
+# that was actually fragile: divergence was recognised by looking for the word
+# "diverging" in git's error text, so the advice existed only while git happened
+# to use that word. Driven through a stub whose stderr says something else
+# entirely, the advice has to come from the counts instead. Nothing in the
+# command's own output can tell the two implementations apart - both print the
+# same helpful text when git cooperates - so the stub is the only way to see it.
+def _update_with_git_error(err_text, counts="1\t1"):
+    """Run cmd_update against a stub git that fails the pull with `err_text`,
+    reporting `counts` for the divergence question. Returns (code, output)."""
+    real_git = tdtheme_cli._git
+
+    def fake_git(argv, cwd=None, **_kw):
+        what = argv[0] if argv else ""
+        if what == "rev-parse":
+            return 0, "abc123\n", ""
+        if what == "rev-list":
+            return 0, f"{counts}\n", ""
+        if what == "status":
+            return 0, "", ""
+        if what == "pull":
+            return 1, "", err_text
+        return 0, "", ""
+
+    tdtheme_cli._git = fake_git
+    try:
+        buf = io.StringIO()
+        # T.root is repointed at the scratch dir, which is not a checkout, so
+        # cmd_update would stop at its first guard before reaching any of this.
+        (tmp / ".git").mkdir(exist_ok=True)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = tdtheme_cli.cmd_update(None)   # reads no arguments
+        return code, buf.getvalue()
+    finally:
+        tdtheme_cli._git = real_git
+
+_code, _out = _update_with_git_error("fatal: something went wrong\n")
+check("both moved on" in _out,
+      f"and the advice does not come from git's wording "
+      f"({_out.strip().splitlines()[-1][:60]!r})")
+# And the other direction: a pull that failed for an unrelated reason, where the
+# remote-tracking ref never moved, must not be dressed up as a divergence. This
+# is what a pull that could not reach the remote looks like, and inventing a
+# merge problem out of a network problem would send the user off to resolve
+# something that does not exist.
+_code, _out = _update_with_git_error("fatal: could not resolve host\n", counts="0\t0")
+check("both moved on" not in _out and "could not resolve host" in _out,
+      f"and a pull that failed for another reason is not called divergence "
+      f"({_out.strip().splitlines()[-1][:60]!r})")
 head = subprocess.run(["git", "-C", str(diverge), "rev-parse", "HEAD"],
                       capture_output=True, text=True).stdout.strip()
 check(subprocess.run(["git", "-C", str(diverge), "status", "--porcelain"],
@@ -1744,6 +1872,48 @@ r = subprocess.run([sys.executable, str(k_repo / "cli.py"), "uninstall", "--keep
                         "TDTHEME_CONFIG": str(k_config)})
 check(not list(k_bin.iterdir()), "--keep-files still removes the links")
 check(state_of(k_config) != STOCK_BYTES, "--keep-files leaves TouchDesigner themed")
+# ...and says so. The closing line used to announce "TouchDesigner is back to
+# stock" unconditionally, and the failure path said "the install is stock either
+# way" regardless, so a user who deliberately kept their theme was told twice
+# that the tool had just thrown it away. Nothing is left on disk to be confused
+# about here, which is exactly why a test that only checks the bytes passes
+# against the wrong message.
+check("still themed" in r.stdout,
+      f"and says the install was left themed, not that it went to stock "
+      f"({r.stdout.strip()[-90:]!r})")
+check("back to stock" not in r.stdout,
+      "and never claims it restored the stock install")
+check("Restoring the stock TouchDesigner UI" not in r.stdout,
+      "and does not say it is restoring stock either")
+
+# The manual `rm -rf` is a line the user is expected to copy and paste, so it has
+# to survive a shell. It used to be printed by interpolating the path bare, which
+# is correct for every checkout on a path without spaces - which is most of them,
+# and every one this was developed on - and silently wrong for the rest, where
+# the command deletes whatever happens to sit either side of the space. Nothing
+# runs it, so the only way to notice is to check that the printed line parses
+# back to the checkout it is supposed to mean.
+spacey = tmp / "a checkout with spaces"
+subprocess.run(["git", "clone", "-q", str(upstream), str(spacey)], check=True)
+s_config = tmp / "uninstall-space-config"
+seed_config(s_config)
+s_bin = tmp / "uninstall-space-bin"
+s_bin.mkdir()
+(s_bin / "tdtheme").symlink_to(spacey / "tdtheme")
+r = subprocess.run([sys.executable, str(spacey / "cli.py"), "uninstall"],
+                   capture_output=True, text=True, cwd=str(spacey),
+                   env={**os.environ, "PATH": f"{s_bin}:/usr/bin:/bin",
+                        "TDTHEME_CONFIG": str(s_config)})
+_rr = [l for l in r.stdout.splitlines() if "rm -rf" in l]
+# Compared against the *resolved* path, because that is what the tool prints:
+# T.root is realpath'd at import, and on macOS that puts /private in front of
+# anything under /var. Comparing against the unresolved path here would fail
+# for a reason that has nothing to do with quoting, which is the same realpath
+# mistake that made uninstall delete the real /opt/homebrew links.
+check(len(_rr) == 1
+      and shlex.split(_rr[0].strip()) == ["rm", "-rf", str(spacey.resolve())],
+      f"the printed rm -rf is one command meaning this checkout, spaces and all "
+      f"({_rr[0].strip() if _rr else 'no rm -rf line printed'})")
 
 # ------------------------------------------------------------------- setup
 #

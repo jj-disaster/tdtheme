@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -290,6 +291,41 @@ def _git(args, cwd):
     return done.returncode, done.stdout.strip(), done.stderr.strip()
 
 
+# The only top-level paths that can change what is installed. The install is a
+# function of two committed inputs - merge(baseline/, themes/<name>/) for the
+# stores, and the theme's own Icons completed from baseline/Icons for the glyphs
+# - so a pull that touches neither leaves the files on disk exactly as correct
+# as they were. `ui.tox` is inside a theme and so is covered by `themes`.
+_INSTALL_INPUT_ROOTS = frozenset({"baseline", "themes"})
+
+
+def _touched_roots(out):
+    """The top-level directories a `git diff --name-only` touches.
+
+    Top-level, not whole paths: the check below intersects this with a set of
+    directory names, and intersecting `themes/default/TouchColors.yaml` with
+    `{"themes"}` is empty. That is a silent wrong answer rather than an error -
+    a pull that changed a theme reported that nothing affecting the install had
+    changed, and told the user not to re-apply.
+    """
+    return {l.strip().split("/", 1)[0] for l in out.splitlines() if l.strip()}
+
+
+def _split_counts(out):
+    """Two integers from `git rev-list --left-right --count`, or (0, 0).
+
+    The output is `<local-only> <upstream-only>`. Anything unparseable reads as
+    "not diverged", which is the safe direction: `git pull --ff-only` is still
+    run afterwards, and it refuses a non-fast-forward itself. This only decides
+    whether the friendly advice is printed, so a wrong answer here costs a worse
+    error message, never a wrong update.
+    """
+    parts = out.split()
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return 0, 0
+    return int(parts[0]), int(parts[1])
+
+
 def _installed_links():
     """The symlinks on PATH that point into this checkout.
 
@@ -348,10 +384,9 @@ def cmd_uninstall(args) -> int:
     """
     # 1. Restore stock. This is the irreversible part, so it comes first while
     #    the code that does it is still here to run.
-    print("Restoring the stock TouchDesigner UI...")
-    if args.keep_files:
-        print("  --keep-files, so the install is left as it is")
-    else:
+    restored = not args.keep_files
+    if restored:
+        print("Restoring the stock TouchDesigner UI...")
         args.name = "default"
         args.force = False
         args.no_icons = False
@@ -364,6 +399,8 @@ def cmd_uninstall(args) -> int:
             print("\nuninstall: the install was not restored, so the links are "
                   "being left alone. Fix the error above and re-run.", file=sys.stderr)
             return code
+    else:
+        print("Leaving TouchDesigner exactly as it is (--keep-files).")
 
     # 2. Remove the links. Only ones that point at *this* checkout - a link to
     #    somewhere else is not this tool's to delete.
@@ -392,14 +429,25 @@ def cmd_uninstall(args) -> int:
             failures += 1
             print(f"  PROBLEM  could not remove {applied.name}: {exc}", file=sys.stderr)
 
-    print(f"\nDone. TouchDesigner is back to stock. The checkout is still here:\n"
-          f"  {T.root}\n"
-          f"It holds your themes, so it is not deleted. To remove it and this "
-          f"machine's\nprivate baseline as well:\n"
-          f"  rm -rf {T.root}")
+    # The closing line reports what actually happened, which under --keep-files is
+    # not "back to stock". It used to say exactly that unconditionally, and
+    # "the install is stock either way" in the failure path below said it a
+    # second time: a user who deliberately kept their theme was told twice that
+    # the tool had just thrown it away.
+    if restored:
+        print("\nDone. TouchDesigner is back to stock. The checkout is still "
+              f"here:\n  {T.root}")
+    else:
+        print("\nDone. The commands are gone; TouchDesigner is untouched, "
+              "still themed.\nThe checkout is still here, holding your themes:")
+    print("It holds your themes, so it is not deleted. To remove it and this "
+          "machine's\nprivate baseline as well:\n"
+          f"  rm -rf {shlex.quote(str(T.root))}")
     if failures:
         print(f"\n{failures} thing(s) above could not be removed, so this is "
-              f"not\nfully uninstalled. The install is stock either way.",
+              f"not\nfully uninstalled."
+              + (" The install is stock either way.\n" if restored
+                 else " The install is untouched either way.\n"),
               file=sys.stderr)
         return EXIT_ERROR
     return EXIT_OK
@@ -432,7 +480,8 @@ def cmd_update(args) -> int:
     # `_git` returns (returncode, stdout, stderr). Getting this order wrong is
     # silent - the values are just reassigned, so `before` held a return code
     # and every comparison below was against the wrong thing.
-    _, before, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
+    _, before, _ = _git(["rev-parse", "HEAD"], T.root)
+    _, short_before, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
 
     _, out, _ = _git(["status", "--porcelain"], T.root)
     dirty = [l for l in out.splitlines() if l.strip()]
@@ -454,27 +503,55 @@ def cmd_update(args) -> int:
     code, out, err = _git(["pull", "--ff-only"], T.root)
     if code != 0:
         print(f"error: git pull failed\n{err}", file=sys.stderr)
-        if "diverging" in err or "divergent" in err:
-            print("\n  Your branch and the remote have both moved on, so there "
-                  "is no\n  fast-forward. This is deliberately not resolved for "
-                  "you:\n    git log --oneline --left-right HEAD...origin/main"
-                  "\n  shows both sides. Then either:\n"
-                  "    git merge origin/main    and resolve, or\n"
-                  "    git rebase origin/main   to replay your commits on top",
+        # Now ask *why* it failed, as a question rather than by recognising the
+        # answer. It used to be found by looking for the word "diverging" in
+        # git's error text, which is a wording this tool does not control and git
+        # is free to change; when it stopped matching, the user got the raw git
+        # error and none of the advice that makes it actionable.
+        #
+        # The question is asked *after* the pull, and that ordering is load-
+        # bearing. `@{upstream}` is the remote-tracking ref, so until something
+        # has fetched it still names what the remote was at clone time: a
+        # checkout one commit ahead and one behind reads as "1 ahead, 0 behind",
+        # which is not diverged, and the check answers "no" - wrong, and quietly
+        # so. `git pull` fetches before it refuses, so this is the first moment
+        # the answer exists. Asking earlier looks tidier, is silently dead, and
+        # the only symptom is git's raw error coming back, which is the thing
+        # this replaced. It costs no extra round trip, and `--ff-only` cannot
+        # have written anything by the time we get here.
+        _, counts, _ = _git(["rev-list", "--left-right", "--count",
+                             f"{before}...@{{upstream}}"], T.root)
+        ahead, behind = _split_counts(counts)
+        if ahead and behind:
+            print(f"\n  Your checkout and its remote have both moved on, so "
+                  f"there is no\n  fast-forward ({ahead} commit(s) here, "
+                  f"{behind} upstream). This is deliberately not resolved for "
+                  f"you:\n"
+                  "    git log --oneline --left-right HEAD...@{upstream}\n"
+                  "  shows both sides. Then either:\n"
+                  "    git merge @{upstream}     and resolve, or\n"
+                  "    git rebase @{upstream}    to replay your commits on top",
                   file=sys.stderr)
         return EXIT_ERROR
 
-    _, after, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
-    if before and after and before != after:
-        print(f"Updated {before} -> {after}")
-        # The install is merge(baseline, theme), so a pull that changes either
-        # one means the files on disk no longer match what this checkout
-        # describes. Naming the re-apply is the whole point of reporting it.
-        print("\n  A new upstream theme is a new theme: it is not installed "
-              "until you\n  apply it. Your currently applied theme is unchanged "
-              "on disk.")
-    else:
+    _, after, _ = _git(["rev-parse", "HEAD"], T.root)
+    _, short_after, _ = _git(["rev-parse", "--short", "HEAD"], T.root)
+    if not (before and after) or before == after:
         print("Already up to date.")
+    else:
+        print(f"Updated {short_before} -> {short_after}")
+        # What changed decides what to say. A pull that only moves docs or tests
+        # leaves the install exactly as valid as it was, and a message about
+        # themes there is noise that trains a reader to skip the line. The
+        # install is merge(baseline, theme), so only those two directories can
+        # make the files on disk disagree with what this checkout describes.
+        _, changed, _ = _git(["diff", "--name-only", f"{before}...{after}"], T.root)
+        if _touched_roots(changed) & _INSTALL_INPUT_ROOTS:
+            print("\n  The baseline or a theme changed, so the install on disk "
+                  "no longer\n  matches this checkout. Re-apply to pick that up:")
+        else:
+            print("\n  Nothing that affects the install changed, so what is "
+                  "installed is\n  still correct and needs no re-apply.")
 
     print("\n  If you changed themes, re-apply to pick up changes to it:\n"
           "    tdtheme reset        back to stock\n"

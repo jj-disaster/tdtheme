@@ -267,6 +267,14 @@ for theme in THEMES:
     # hand-placed icon.
     if not (json.loads(recipe_file.read_text()).get("ops") or []):
         continue
+    # A theme that ships no icons at all is a supported authoring state - the
+    # baseline supplies the whole set at apply time - so it has nothing rendered
+    # here and there is nothing to assert. Pink is one: it recolours the palette
+    # and kept all 21 ops, so the "no ops" test above passed it through, and with
+    # its icon TIFFs deleted the regenerated set is empty rather than wrong.
+    if not theme_icons_dir(theme).is_dir() or not any(
+            theme_icons_dir(theme).glob("*.tiff")):
+        continue
     regen = icons.icon_manifest(theme_icons_dir(theme))
     kinds = {v["alpha"] for v in regen.values()}
     check(kinds == {"associated"},
