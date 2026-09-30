@@ -29,27 +29,52 @@ list of themes, you are installed and can stop reading.
 ### Put it on your PATH (optional)
 
 The wrapper resolves its own location, so `cd`-ing into the checkout always
-works. To drop the `./` and run it from anywhere, use the setup script — it
-picks a directory it can actually write to and tells you what it chose:
+works. To drop the `./` and run it from anywhere, use the setup script:
 
 ```sh
 ./setup
 ```
 
-It links `tdtheme`, `tdthememaker` and `check-td-writes` together, because the
-second two are the companions you want in the same place anyway and both hit
-the same `permission denied` problems. Other flags:
+It links `tdtheme`, `tdthememaker` and `check-td-writes`, because the second two
+are the companions you want in the same place anyway and both hit the same
+`permission denied` problems. Then it picks a directory it can actually write
+to, tells you which one, and **runs the command it just installed** to check it.
+
+The exit status is the answer. `0` means all three links are in place and
+`tdtheme` runs from the installed name. `2` means it refused before creating
+anything: no `cli.py` next to it, no working interpreter, or nowhere to put the
+links. `1` means it could not finish — a name in the way, or a link that will
+not run — and it closes by telling you what to look at rather than leaving a
+half-made install.
 
 ```sh
-./setup --check              # report what it would do, change nothing
-./setup --uninstall          # remove the links it made
-./setup "$HOME/.local/bin"   # put them somewhere specific
-SETUP_DEBUG=1 ./setup        # trace every probe it makes
+./setup                     # link into the best directory, and verify
+./setup --check             # report what it would do, change nothing
+./setup --uninstall         # remove the links it made
+./setup "$HOME/.local/bin"  # a directory you choose; it has to exist already
+./setup --help              # the same text, without linking anything
+SETUP_DEBUG=1 ./setup       # trace every probe, including the ones that worked
 ```
 
-If it picks a directory that is not on your `PATH`, it prints the `export` line
-to add. That is not a failure — the links are correct, they just need one line
-in your shell rc before the bare name resolves.
+The flags are read *after* the preflight, so `--check` and `--help` still run it.
+Neither creates or removes a link, but both will restore a missing exec bit —
+that check is a repair rather than a report, so it is the one case where
+"change nothing" is not quite the whole sentence.
+
+**Where the links go.** In order: `${HOMEBREW_BIN}`, `/opt/homebrew/bin`,
+`/usr/local/bin`, `~/.local/bin` — the first that exists and is writable. A
+directory that is *on* your `PATH` but not writable is skipped rather than
+fatal: `/usr/local/bin` is on `PATH` and owned by root on plenty of Macs, and
+asking for `sudo` to fix something `~/.local/bin` solves for free is the wrong
+trade.
+
+If it lands somewhere that is not on your `PATH` it prints the `export` line to
+add. **That is not a failure** — the links are correct, they just need one line
+in your shell rc before the bare name resolves, so the exit status stays `0`:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"   # in ~/.zshrc
+```
 
 **A symlink, not a copy.** `tdtheme` has no dependencies to resolve, and it reads
 `themes/` and `baseline/` from the repository it lives in. A symlink keeps one
@@ -68,36 +93,82 @@ tdtheme apply midnight
 (`tdthememaker-cli`), because the package directory already owns the name
 `tdthememaker`. `setup` handles that rename for you.
 
-### If `setup` reports `permission denied` for a link you did not create
+**It verifies by running it.** The check is `tdtheme --help` through the link *by
+absolute path*, from a temporary directory, with `PATH` set to the target
+directory alone. Every earlier check in the script can pass while the command is
+still broken, and leaving the inherited `PATH` on the end would let an unrelated
+`tdtheme` further down it answer the question instead. The `PATH` question is
+then asked separately, because that is the part that varies by shell and the part
+you fix in a different file.
 
-It refuses rather than guessing, and tells you which of the two causes it found.
-Both produce the identical `zsh: permission denied` from a link that looks
-perfectly well formed, which is why the script checks for both:
+Re-running is a no-op — `tdtheme already linked to this checkout`. A link
+pointing at some *other* checkout, which is what a moved or re-cloned repository
+leaves behind, is replaced and says so whether it is broken or not. A
+directory or a plain file is never replaced; see below.
+
+`./setup --uninstall` removes the links and leaves the checkout alone, and it
+touches a link only if that link points at *this* checkout. Anything else was
+not put there by this tool, so removing it is not its decision.
+
+### What `setup` refuses, and what it repairs
+
+All of this happens in one pass **before the first `ln`**, which is what makes
+"nothing was left half-done" true rather than hopeful. Two of three are refusals,
+and the third is a repair:
+
+- **A directory or a plain file owns the name.** This is the sneaky one: `ln -s`
+  does not fail when the target is already a directory, it nests the link
+  *inside* it, and `PATH` then resolves the name to a directory — which is the
+  `permission denied` explained below. `setup` stops, names what is there, and
+  gives you the `rm -rf` to run **only if the directory is empty**, where it
+  says so; if it is not empty it tells you and touches nothing.
+- **No working `python3` anywhere.** Nothing is created: leaving you a set of
+  commands on `PATH` that cannot run is the one outcome worth stopping for, and
+  the message names both fixes.
+- **A wrapper lost its exec bit.** This one is *repaired*, not refused: the file
+  is `chmod +x`'d and the repair is reported, because the bit is recorded in git,
+  so a clone keeps it and only a copy through exFAT, cloud sync or a zip loses
+  it. A silent repair would be a repair nobody learns to trust.
+
+TouchDesigner missing from `/Applications` is not a refusal either. It says so
+and installs the links anyway, because they are harmless without it and `apply`
+is what will have nowhere to write.
+
+### If a link reports `permission denied` anyway
+
+Two different causes produce the identical `zsh: permission denied` from a link
+that looks perfectly well formed, which is why the script checks for both:
 
 - **The file behind the link is not executable.** Git records the exec bit so a
   clone keeps it, but exFAT, cloud sync and zip all drop it. `setup` restores it
-  and says so.
-- **Something is a directory where the link goes.** `ln -s` does not fail when
-  that happens; it nests the link *inside* the directory, and `PATH` then finds
-  a directory where a command should be. Executing a directory is `EACCES` — the
-  same error, a completely different cause. `setup` refuses, and if the
-  directory is empty it gives you the `rm -rf` to fix it. If it is **not**
-  empty it will not touch it.
+  and says so; if you skipped `setup`, `chmod +x` the three wrappers yourself.
+- **Something is a directory where the link goes.** `PATH` resolves the name to a
+  directory, and executing one is `EACCES`. Check which you have with
+  `ls -ld "$(command -v tdtheme)"`.
 
-### If it says `no python3 found`
+Both are fixed by re-running `./setup`, which repairs the first and refuses the
+second until you have moved whatever is in the way.
+
+### If a command says it cannot find a `python3`
 
 You do not need to install Python. TouchDesigner already ships a full CPython
-3.11, and the wrapper falls back to it automatically — it only complains if
-*neither* a working `python3` on your `PATH` *nor* TouchDesigner can be found.
-`setup` checks this before it creates any links, so it will not leave you with
-three commands that cannot run.
+3.11, and both Python wrappers fall back to it automatically — they only
+complain if *neither* a working `python3` on your `PATH` *nor* TouchDesigner can
+be found. (`check-td-writes` is pure shell and needs neither.) `setup` checks the
+same thing before it creates any links, so it will not leave you holding a set of
+commands that cannot run.
 
-The case that trips people up is a Mac without the Command Line Tools, where
-`/usr/bin/python3` exists but is only a 118 KB stub that opens a GUI installer
-instead of running. All three commands handle that: each one *runs* the `python3`
-it finds rather than trusting that it exists, and falls back to TouchDesigner's
-bundled interpreter when it does not work. You should still install the real
-thing, so that anything else on your machine that wants `python3` gets it too:
+The message names which of the two you have, because the fix differs.
+`no python3 on PATH, and no TouchDesigner interpreter either` means there is
+none at all. `the python3 on your PATH is present but does not run` means it is
+the Command Line Tools stub: on a Mac with no CLT, `/usr/bin/python3` exists, is
+executable, and opens a GUI installer instead of running anything. Both wrappers
+handle that, because each one *runs* the `python3` it finds rather than trusting
+that it exists, and falls back to TouchDesigner's bundled interpreter when it
+does not work.
+
+Either way you should install the real thing, so that anything else on your
+machine that wants `python3` gets it too:
 
 ```sh
 xcode-select --install
@@ -112,6 +183,10 @@ owned by root, you will get a permission error.
 ```sh
 sudo chown -R "$USER" /Applications/TouchDesigner.app/Contents/Resources/tfs/Config
 ```
+
+If TouchDesigner is not in `/Applications` at all, there is nothing to write to.
+`setup` tells you so and installs the links anyway; the commands themselves work,
+and `apply` is the one that stops.
 
 Note that the app bundle's code signature was already invalid before this tool
 existed (a sealed resource is missing from `Python.framework`), so editing files
@@ -888,6 +963,8 @@ tdtiff.py               the TIFF reader, shared by tdicons.py and tdthememaker
 tdicons.py              icon-set validation and install, PNG previews
 cli.py                  argument parsing and output
 tdtheme                 shell wrapper
+tdthememaker-cli        the authoring entry point, installed as `tdthememaker`
+setup                   links all three onto PATH, and checks the result
 check-td-writes         settles whether TouchDesigner writes these files
 docs/                   background reading; see Documentation below
 baseline/               captured pristine files + Icons/ + System/ui.tox
@@ -943,7 +1020,8 @@ everything else runs without it.
 
 ```
 python3 tests/test_roundtrip.py           # byte-exact gate
-python3 tests/test_tdtheme.py             # merge/diff/validate/capture/apply
+python3 tests/test_tdtheme.py             # merge/diff/validate/capture/apply,
+                                          #   plus uninstall, update and ./setup
 python3 tests/test_icons.py               # read, validate, diff, apply, preview
 python3 tdthememaker/tests/test_thememaker.py   # generation + export
 ```
@@ -953,6 +1031,14 @@ The first three run against a throwaway copy of the install selected by the
 TouchDesigner config. `test_icons.py` additionally cross-checks the codec
 against `sips`, so a systematic misreading of the TIFF format cannot pass by
 agreeing with itself.
+
+`test_tdtheme.py` is also the only suite that runs the shell scripts, and it
+runs them the way a user hits them: `setup` against a real directory, a decoy
+`tdtheme` earlier in `PATH`, a wrapper with its exec bit removed, and a
+Command Line Tools stub standing in for `python3`. Run it under
+TouchDesigner's interpreter as well as the one on your `PATH` — that is the
+interpreter with PyYAML, and the two overlay loaders are required to return the
+same data for the same file.
 
 The tool has **no third-party dependencies**. It uses PyYAML when
 importable (TouchDesigner bundles 6.0.3) and otherwise falls back to a
