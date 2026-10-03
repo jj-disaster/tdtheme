@@ -1,13 +1,9 @@
 # tdtheme
 
 A theme manager for TouchDesigner on macOS. Allows you to apply themes to your touchdesigner to change everything (yes everything) about the way it looks.
+#### Origins and AI use:
+ *A large amount of the infrastructure and file management aspect of this system is vibecoded, but much of the reverse engineering was by me, as well as the themes. Originally designed to be just a tool that I used for doing theme stuff, I thought it could be a thing that people would enjoy, so here it is. Enjoy!*
 
-```
-tdtheme status
-tdtheme list
-tdtheme apply pink
-tdtheme reset              
-```
 
 ## Installation
 
@@ -15,23 +11,27 @@ Only requires macOS, git, and Touchdesigner
 
 ```sh
 git clone https://github.com/jj-disaster/tdtheme.git
+#if you haven't installed git or xcode command line tools, 
+#it should prompt you to do that :) then try the command again
 cd tdtheme
 ./setup #optional to put onto path, allows you to use commands
 ```
-
-
-### If your TouchDesigner is newer than the baseline
-
-Run this once, before your first `apply`:
+### Basic Commands
 
 ```sh
-tdtheme capture --local
+tdtheme status #checks on tdtheme
+tdtheme list #lists the themes
+tdtheme apply pink #replace with any theme to apply
+tdtheme reset              
 ```
+
+
 
 
 ## Using it
 
-The whole tool is pretty simple.
+The whole tool is pretty simple. See [Commands](#commands) for the full list.
+
 ### 1. Check it can see your install
 
 ```sh
@@ -48,12 +48,8 @@ themes            bnw, default, defaultnowarn, midnight, mono, pink, sunset
                   last applied: pink
 ```
 
-The **build** tells you which TouchDesigner this is, and whether the baseline was captured from the same one. **Drift** — the
-per-file lines further down — tells you whether the files on disk still match
-what `tdtheme` last wrote, which is how you find out that something else changed
-them. And `last applied` is the theme that is currently installed.
 
-If your build is not the one the committed baseline came from, do step 1b.
+
 
 
 
@@ -67,7 +63,7 @@ tdtheme list #prints all available themes
 ### 3. Apply themes
 
 ```sh
-tdtheme apply pink # don't forget to restart td
+tdtheme apply pink # don't forget to restart td after
 ```
 
 
@@ -138,37 +134,21 @@ worth reverting with `git checkout themes/` if you want the committed set back.
 new theme, which is the easy way to start one from your own colours. See
 [Writing themes](#writing-themes).
 
-## What it actually edits
+## How it works:
 
-Two files, one directory and a third file, inside the app bundle:
+it writes to 3 files, then a folder of icons! 
 
 | Path | Shape | Controls |
 |---|---|---|
 | `TouchColors` | `key <TAB> r <TAB> g <TAB> b` | every UI colour, incl. all network-editor keys |
 | `TouchOptions` | `key <TAB> value` | numeric UI options - sizing, spacing, alpha |
-| `Icons/*.tiff` | classic TIFF, 8-bit RGB(A) | the 97 UI glyphs: flags, badges, overlays |
-| `System/ui.tox` | TouchDesigner's own `.tox` | the UI itself: dialog and window geometry, layout |
+| `Icons/*.tiff` | TIFF, 8-bit RGB(A) | the 97 UI icons
+| `System/ui.tox` | `.tox` | the UI itself: dialog and window geometry, layout, other colors, extra buttons, modified ui elements, the sky is the limit with this! |
 
-The two stores are read at startup. The icons are not - they are read **lazily
-on first use and then cached for the life of the process**, so an icon change
-needs a restart even to be looked at. See [Icons](#icons). `ui.tox` is a
-different case again: it cannot be edited at all, only installed whole. See
+TouchColors and TouchOptions are read at startup. The icons are read lazily
+on first use and then cached while td stays running. See [Icons](#icons). `ui.tox` is a
+different case again: it cannot be edited at all, only installed whole. To modify this guy, you do it inside of touchdesigner, save it as a tox, then move the file into your theme. This is by far the trickiest and most annoying one. See
 [ui.tox](#uitox).
-
-Format details that matter, all verified rather than assumed:
-
-- `TouchColors` has 626 keys. Two of them (`dialog.commenthint`,
-  `dialog.commenthint.comp`) carry an **extra empty second field**, so the
-  colour is the *last three* fields, not fields 2-4.
-- `TouchOptions` has 183 keys. Some values are legitimately empty
-  (`font.default.face`, `font.mono.face`).
-- The two files share **zero** keys - disjoint namespaces.
-- The 97 icons are 83 neutral-ink glyphs, 3 of them pure black, and 14
-  genuinely coloured. 89 are LZW-compressed, 8 are not, and 5 are split across
-  multiple strips. See [Icons](#icons) below.
-- The stores round-trip byte-for-byte through this tool. That invariant is
-  enforced by `tests/test_roundtrip.py`, which is the acceptance gate for
-  every other change.
 
 ## Commands
 
@@ -508,8 +488,7 @@ suspicious.
   every theme inherits the new build's layout. **Run
   `tdtheme capture --local` first, before any `apply`** — a build that added
   store keys makes `apply` refuse until you have, and it will not refuse if you
-  have already applied and lost them. See
-  [If your TouchDesigner is newer than the baseline](#if-your-touchdesigner-is-newer-than-the-baseline).
+  have already applied and lost them.
 - **The app bundle's code signature was already invalid** before this tool
   existed (a sealed resource is missing in `Python.framework`). Editing
   files inside the bundle does not make that worse, but it is why macOS
