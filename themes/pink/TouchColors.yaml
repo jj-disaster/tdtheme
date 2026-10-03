@@ -19,12 +19,14 @@ SOP.hilite: ["0.944", "0.354", "0.6802"]
 TOP: ["1", "0.258", "0.4494"]
 #
 ## --- tiles ----------------------------------------------------------------
-#tile.bg: ["0.02", "0.02", "0.03"]
+tile.flag.display: ["1", "0.490167","1"]
+tile.flag.viewer: ["0.765", "0.0772","0.3982"]
+tile.flag.activate: ["0.927","0.2178","0.5251"]
 #tile.active.bg: ["0.07", "0.08", "0.11"]
-#tile.name.bg: ["0.13", "0.14", "0.18"]
-#tile.flag.bg: ["0.18", "0.19", "0.23"]
+# tile.name.bg: ["1", "0.14", "0.18"]
 #tile.connector.bg: ["0.08", "0.09", "0.12"]
 #
+top.viewer.bg: ["0.832", "0.5358", "0.7001"]
 ## --- wiring ---------------------------------------------------------------
 ## Lifted from the shipped 0.2 grey so connections stand out on the
 ## darker background. default.tile.line has no `tile.line` twin, so there
@@ -40,10 +42,16 @@ TOP: ["1", "0.258", "0.4494"]
 #tile.connection.hilite1: ["1", "0.85", "0.35"]
 #tile.connection.hilite2: ["0.65", "0.45", "0.15"]
 #
-## --- generic chrome -------------------------------------------------------
-## These live in the `default.` tier, which is the only tier these keys
-## have. Changing them affects every surface that does not override them.
-#default.bg: ["0.14", "0.15", "0.18"]
-#default.fg: ["0.72", "0.74", "0.78"]
-#default.field.bg: ["0.1", "0.11", "0.14"]
-#default.button: ["0.3", "0.32", "0.36"]
+# --- generic chrome -------------------------------------------------------
+# These live in the `default.` tier, which is the only tier these keys
+# have. Changing them affects every surface that does not override them.
+# default.bg: ["1", "1", "0"]
+# default.fg: ["1", "0", "0"]
+# default.field.bg: ["0", "0", "1"]
+# default.button: ["0", "1", "0"]
+
+textsheet.editable: ["0.832", "0.5358", "0.7001"]
+
+
+textport.fg: ["0.832", "0.5358", "0.7001"]
+dat.python.editable: ["0.832", "0.5358", "0.7001"]

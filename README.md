@@ -1,197 +1,24 @@
 # tdtheme
 
-A theme manager for TouchDesigner on macOS. It edits the undocumented config
-files and icon directory that control the whole UI - every colour, every size,
-every glyph - so you can build and switch themes instead of hand-editing them.
+A theme manager for TouchDesigner on macOS. Allows you to apply themes to your touchdesigner to change everything (yes everything) about the way it looks.
 
 ```
-./tdtheme status
-./tdtheme list
-./tdtheme apply midnight
-./tdtheme reset              # back to the stock look
+tdtheme status
+tdtheme list
+tdtheme apply pink
+tdtheme reset              
 ```
 
 ## Installation
 
-Requires macOS and TouchDesigner. Nothing else — no pip, no virtualenv, no
-build step. It is a few Python files that read and write four files inside your
-TouchDesigner install.
+Only requires macOS, git, and Touchdesigner
 
 ```sh
 git clone https://github.com/jj-disaster/tdtheme.git
 cd tdtheme
-./tdtheme status
+./setup #optional to put onto path, allows you to use commands
 ```
 
-That last line is the real test. If it prints your TouchDesigner build and a
-list of themes, you are installed and can stop reading.
-
-### Put it on your PATH (optional)
-
-The wrapper resolves its own location, so `cd`-ing into the checkout always
-works. To drop the `./` and run it from anywhere, use the setup script:
-
-```sh
-./setup
-```
-
-It links `tdtheme`, `tdthememaker` and `check-td-writes`, because the second two
-are the companions you want in the same place anyway and both hit the same
-`permission denied` problems. Then it picks a directory it can actually write
-to, tells you which one, and **runs the command it just installed** to check it.
-
-The exit status is the answer. `0` means all three links are in place and
-`tdtheme` runs from the installed name. `2` means it refused before creating
-anything: no `cli.py` next to it, no working interpreter, or nowhere to put the
-links. `1` means it could not finish — a name in the way, or a link that will
-not run — and it closes by telling you what to look at rather than leaving a
-half-made install.
-
-```sh
-./setup                     # link into the best directory, and verify
-./setup --check             # report what it would do, change nothing
-./setup --uninstall         # remove the links it made
-./setup "$HOME/.local/bin"  # a directory you choose; it has to exist already
-./setup --help              # the same text, without linking anything
-SETUP_DEBUG=1 ./setup       # trace every probe, including the ones that worked
-```
-
-The flags are read *after* the preflight, so `--check` and `--help` still run it.
-Neither creates or removes a link, but both will restore a missing exec bit —
-that check is a repair rather than a report, so it is the one case where
-"change nothing" is not quite the whole sentence.
-
-**Where the links go.** In order: `${HOMEBREW_BIN}`, `/opt/homebrew/bin`,
-`/usr/local/bin`, `~/.local/bin` — the first that exists and is writable. A
-directory that is *on* your `PATH` but not writable is skipped rather than
-fatal: `/usr/local/bin` is on `PATH` and owned by root on plenty of Macs, and
-asking for `sudo` to fix something `~/.local/bin` solves for free is the wrong
-trade.
-
-If it lands somewhere that is not on your `PATH` it prints the `export` line to
-add. **That is not a failure** — the links are correct, they just need one line
-in your shell rc before the bare name resolves, so the exit status stays `0`:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"   # in ~/.zshrc
-```
-
-**A symlink, not a copy.** `tdtheme` has no dependencies to resolve, and it reads
-`themes/` and `baseline/` from the repository it lives in. A symlink keeps one
-copy of your theme data and makes the command always reflect the current
-checkout; an installed copy would be a second, silently-drifting copy of the
-same themes, and `apply` would install from whichever one it found first.
-
-Then it works from anywhere:
-
-```sh
-cd ~
-tdtheme apply midnight
-```
-
-`tdthememaker` needs a different installed filename than its repo directory
-(`tdthememaker-cli`), because the package directory already owns the name
-`tdthememaker`. `setup` handles that rename for you.
-
-**It verifies by running it.** The check is `tdtheme --help` through the link *by
-absolute path*, from a temporary directory, with `PATH` set to the target
-directory alone. Every earlier check in the script can pass while the command is
-still broken, and leaving the inherited `PATH` on the end would let an unrelated
-`tdtheme` further down it answer the question instead. The `PATH` question is
-then asked separately, because that is the part that varies by shell and the part
-you fix in a different file.
-
-Re-running is a no-op — `tdtheme already linked to this checkout`. A link
-pointing at some *other* checkout, which is what a moved or re-cloned repository
-leaves behind, is replaced and says so whether it is broken or not. A
-directory or a plain file is never replaced; see below.
-
-`./setup --uninstall` removes the links and leaves the checkout alone, and it
-touches a link only if that link points at *this* checkout. Anything else was
-not put there by this tool, so removing it is not its decision.
-
-### What `setup` refuses, and what it repairs
-
-All of this happens in one pass **before the first `ln`**, which is what makes
-"nothing was left half-done" true rather than hopeful. Two of three are refusals,
-and the third is a repair:
-
-- **A directory or a plain file owns the name.** This is the sneaky one: `ln -s`
-  does not fail when the target is already a directory, it nests the link
-  *inside* it, and `PATH` then resolves the name to a directory — which is the
-  `permission denied` explained below. `setup` stops, names what is there, and
-  gives you the `rm -rf` to run **only if the directory is empty**, where it
-  says so; if it is not empty it tells you and touches nothing.
-- **No working `python3` anywhere.** Nothing is created: leaving you a set of
-  commands on `PATH` that cannot run is the one outcome worth stopping for, and
-  the message names both fixes.
-- **A wrapper lost its exec bit.** This one is *repaired*, not refused: the file
-  is `chmod +x`'d and the repair is reported, because the bit is recorded in git,
-  so a clone keeps it and only a copy through exFAT, cloud sync or a zip loses
-  it. A silent repair would be a repair nobody learns to trust.
-
-TouchDesigner missing from `/Applications` is not a refusal either. It says so
-and installs the links anyway, because they are harmless without it and `apply`
-is what will have nowhere to write.
-
-### If a link reports `permission denied` anyway
-
-Two different causes produce the identical `zsh: permission denied` from a link
-that looks perfectly well formed, which is why the script checks for both:
-
-- **The file behind the link is not executable.** Git records the exec bit so a
-  clone keeps it, but exFAT, cloud sync and zip all drop it. `setup` restores it
-  and says so; if you skipped `setup`, `chmod +x` the three wrappers yourself.
-- **Something is a directory where the link goes.** `PATH` resolves the name to a
-  directory, and executing one is `EACCES`. Check which you have with
-  `ls -ld "$(command -v tdtheme)"`.
-
-Both are fixed by re-running `./setup`, which repairs the first and refuses the
-second until you have moved whatever is in the way.
-
-### If a command says it cannot find a `python3`
-
-You do not need to install Python. TouchDesigner already ships a full CPython
-3.11, and both Python wrappers fall back to it automatically — they only
-complain if *neither* a working `python3` on your `PATH` *nor* TouchDesigner can
-be found. (`check-td-writes` is pure shell and needs neither.) `setup` checks the
-same thing before it creates any links, so it will not leave you holding a set of
-commands that cannot run.
-
-The message names which of the two you have, because the fix differs.
-`no python3 on PATH, and no TouchDesigner interpreter either` means there is
-none at all. `the python3 on your PATH is present but does not run` means it is
-the Command Line Tools stub: on a Mac with no CLT, `/usr/bin/python3` exists, is
-executable, and opens a GUI installer instead of running anything. Both wrappers
-handle that, because each one *runs* the `python3` it finds rather than trusting
-that it exists, and falls back to TouchDesigner's bundled interpreter when it
-does not work.
-
-Either way you should install the real thing, so that anything else on your
-machine that wants `python3` gets it too:
-
-```sh
-xcode-select --install
-```
-
-### If it cannot write to TouchDesigner
-
-`apply` needs write access to
-`/Applications/TouchDesigner.app/Contents/Resources/tfs/Config`. If the files are
-owned by root, you will get a permission error.
-
-```sh
-sudo chown -R "$USER" /Applications/TouchDesigner.app/Contents/Resources/tfs/Config
-```
-
-If TouchDesigner is not in `/Applications` at all, there is nothing to write to.
-`setup` tells you so and installs the links anyway; the commands themselves work,
-and `apply` is the one that stops.
-
-Note that the app bundle's code signature was already invalid before this tool
-existed (a sealed resource is missing from `Python.framework`), so editing files
-inside the bundle does not make that worse. See
-[Things that will bite you](#things-that-will-bite-you).
 
 ### If your TouchDesigner is newer than the baseline
 
@@ -201,19 +28,10 @@ Run this once, before your first `apply`:
 tdtheme capture --local
 ```
 
-The committed baseline was captured from one specific build (2025.33230). A newer
-build may have added keys, and `apply` **refuses to write** rather than delete
-them — see [If your TouchDesigner is newer than the
-baseline](#if-your-touchdesigner-is-newer-than-the-baseline) for what that
-message means. `capture --local` writes a gitignored, per-machine copy that every
-later command prefers, so your install is diffed against the build you actually
-run. It is safe to delete the directory to go back.
 
 ## Using it
 
-The whole workflow is four commands. The rest of this README is detail on any
-of them.
-
+The whole tool is pretty simple.
 ### 1. Check it can see your install
 
 ```sh
@@ -230,94 +48,37 @@ themes            bnw, default, defaultnowarn, midnight, mono, pink, sunset
                   last applied: pink
 ```
 
-Three things worth reading here. The **build** tells you which TouchDesigner this
-is, and whether the baseline was captured from the same one. **Drift** — the
+The **build** tells you which TouchDesigner this is, and whether the baseline was captured from the same one. **Drift** — the
 per-file lines further down — tells you whether the files on disk still match
 what `tdtheme` last wrote, which is how you find out that something else changed
 them. And `last applied` is the theme that is currently installed.
 
 If your build is not the one the committed baseline came from, do step 1b.
 
-### 1b. On a different build, capture your own baseline
+
+
+### 2. See all themes
 
 ```sh
-tdtheme capture --local
+tdtheme list #prints all available themes
 ```
 
-Skip this on a matching build. It writes a private `baseline.local/` that every
-later command prefers over the committed `baseline/`, so your install is diffed
-against the build you actually run. See
-[If your TouchDesigner is newer than the baseline](#if-your-touchdesigner-is-newer-than-the-baseline).
 
-### 2. See what is on offer
+### 3. Apply themes
 
 ```sh
-tdtheme list
+tdtheme apply pink # don't forget to restart td
 ```
 
-```
-    bnw                  TouchColors 419, TouchOptions 0 icons 97 (all differ in bytes)
-    default              TouchColors 0, TouchOptions 0 icons 97 (all differ in bytes)
-    defaultnowarn        TouchColors 0, TouchOptions 0 icons 1 (96 absent, 1 changed)
-    midnight             TouchColors 20, TouchOptions 0 icons 97 (all differ in bytes)
-    mono                 TouchColors 460, TouchOptions 0 icons 97 (all differ in bytes)
-  * pink                 TouchColors 4, TouchOptions 0 icons 97 (stock bytes)
-    sunset               TouchColors 17, TouchOptions 1 icons 97 (all differ in bytes)
 
-* = last applied by tdtheme (pink).
-```
-
-`mono` changes 460 keys, `midnight` changes 20. The number is the size of the
-change, so it is the first thing to look at when picking one. The `icons` column
-counts bytes rather than pixels, so that `list` stays fast enough to read at a
-glance — `tdtheme icons diff` is the pixel-accurate version.
-
-To read the individual changes before applying anything:
-
-```sh
-tdtheme diff midnight
-```
-
-That lists every key with its old and new value. Nothing is written.
-
-### 3. Apply one
-
-```sh
-tdtheme apply midnight
-```
-
-Then **restart TouchDesigner**. It reads the two stores at startup, and each
-icon is cached the first time it is drawn — so an icon change is not even looked
-at until a restart, let alone a new process.
-
-```
-Applied theme 'midnight'
-    TouchColors: 20 changed
-    TouchOptions: unchanged
-    icons: 97 written, 0 already matched the baseline
-    ui.tox: written from default (this theme has no ui.tox)
-    TouchDesigner is closed; changes are live on next launch.
-```
-
-Both stores always print, because `unchanged` is a real answer and silence
-would read as a bug. These are counts, not a change report — the largest
-shipped theme changes 460 keys, and a line naming them is a line nobody reads.
-For the key-by-key listing, `tdtheme diff` is the tool.
-
-Note the last line: if TouchDesigner is open when you apply, the change lands on
-disk but you will not see it until a restart, and the message tells you so
-rather than letting you think it failed.
-
-### 4. Go back
+### 4. Reset to the default theme
 
 ```sh
 tdtheme reset
+#or 
+tdtheme apply default
 ```
 
-An alias for `apply default`. There is no undo stack: the install is a pure
-function of the baseline and the theme, both in git, so re-applying the previous
-theme restores the exact bytes. See
-[Undo is re-applying, not restoring](#undo-is-re-applying-not-restoring).
 
 ### Keeping it up to date
 
@@ -325,24 +86,8 @@ theme restores the exact bytes. See
 tdtheme update
 ```
 
-A `git pull` of this checkout, and it **refuses** in two cases rather than
+A `git pull` of this repo
 guessing:
-
-- **Uncommitted changes.** A theme you are editing on disk is invisible to git,
-  so a pull that overwrites it loses work no `reflog` can bring back. It lists
-  what is modified and stops. `git stash` sets it aside.
-- **A diverged branch.** If your commits and upstream's have both moved on there
-  is no fast-forward, and this will not invent a merge commit for you. It prints
-  the `git log --left-right` you want and stops.
-
-It only ever fast-forwards, so it never creates a commit you did not ask for.
-
-An update does not change what is installed. It tells you whether the pull left
-it that way: if the pull changed `baseline/` or `themes/` — the only two things
-the install is built from — it says so and asks you to re-apply, and if it only
-changed docs or tests it says the install is still correct and needs nothing.
-A pull that only moves documentation is the common case, and being told a new
-theme had arrived each time is how a reader learns to skip the line that matters.
 
 ### Removing it
 
@@ -350,25 +95,15 @@ theme had arrived each time is how a reader learns to skip the line that matters
 tdtheme uninstall
 ```
 
-Restores the stock UI **first**, then removes the three commands from `PATH`. The
-order is the point: once the links are gone there is no way to undo a theme but
-by hand-editing four undocumented files.
+Restores the default theme, then removes tdtheme from `PATH`.
 
-**The checkout is not deleted.** It holds your themes, and a command whose name
-reads like "remove this program" should not be the thing that deletes them. It
-prints the directory and the `rm -rf` for it — quoted, so it survives a path with
-a space in it — and leaves that decision to you, including whether to keep
-`baseline.local/`.
 
 `--keep-files` removes the commands but leaves TouchDesigner themed as it is now,
-and says that it did. It does not claim the install went to stock, because it did
-not: you asked to keep the files, and a line saying otherwise is worse than no
-line at all.
+
 
 ### Looking at the icons
 
-The icon set is the part you cannot judge from a number, so it gets its own
-commands:
+this is largely for agents
 
 ```sh
 tdtheme icons preview midnight   # a PNG contact sheet of all 97 glyphs
@@ -376,11 +111,12 @@ tdtheme icons diff midnight      # which icons this theme actually repaints
 tdtheme icons list               # size and digest per file
 ```
 
-`preview` writes `testiconsforagents/<theme>-icons.png` — a gitignored scratch
-directory, so it will not dirty your checkout. It is the fastest way to see what
-a theme does, and worth running before any `apply`. Open the PNG in Preview.
+`preview` writes `testiconsforagents/<theme>-icons.png`, git ignored by default
 
 ### Making your own
+this whole system is super fucked still, i haven't put much time into really documenting or developing this out, but there was some things that i was working on that needed to be not in the regular tdtheme but i wanted people to have access to. ai summary:
+
+
 
 Authoring is a separate command, `tdthememaker`, because it is a different job —
 it generates things, `tdtheme` only merges and installs them.
@@ -465,116 +201,34 @@ Sparse rather than full-file copies because a TouchDesigner update can add
 new keys. A full copy would silently drop them; an overlay inherits them
 from the baseline.
 
-### Undo is re-applying, not restoring
-
-`apply` does **not** keep a copy of what it replaces unless you pass
-`--backup`. That is a change of default, and the reasoning is worth stating
-because the safety net it removes looks load-bearing until you check where the
-files come from.
-
-The install is reconstructible from what is already in this repository. The two
-stores only ever hold `merge(baseline/, themes/<name>/)`, and the icon set only
-ever holds a theme's own icons completed from `baseline/Icons/` — so for any
-theme that is committed, the bytes on disk are a pure function of two files git
-already tracks. `tdtheme apply <the previous theme>` puts them back exactly, and
-`tdtheme status` tells you which theme that is. This is not a claim in a
-comment; `tests/test_icons.py` rebuilds a themed install from `baseline/` plus
-`themes/` and compares it byte for byte.
-
-What a backup actually adds is cover for the one input git does not have: a
-theme you edited on disk and have not committed. That is worth having when you
-are in the middle of an edit, and not worth 36 KB to 464 KB on every apply for
-the rest of the time — the set varies with how much of the install the outgoing
-theme had changed, and nothing ever pruned `backups/`.
-
-So:
-
-- **`tdtheme apply midnight`** — no copy kept, nothing to clean up. Undo by
-  re-applying, or `tdtheme reset` for stock.
-- **`tdtheme apply midnight --backup`** — the outgoing stores and icons are
-  copied to `backups/<timestamp>/` first. The `ui.tox` is still not copied; see
-  [ui.tox](#uitox) for why that one is excluded even from this.
-- **`backups/` is gitignored.** It is a local scratch space, never committed,
-  and it sits in the checkout rather than anywhere off the disk — so it protects
-  against a wrong `apply`, not against losing the machine.
-
-### If your TouchDesigner is newer than the baseline
-
-The baseline in this repository was captured from one build. A newer build may
-have added keys to `TouchColors` or `TouchOptions`, and `apply` writes
-`merge(baseline, theme)` — so a key that is in neither input is **not written
-back**. It would be deleted, silently, as a side effect of changing the
-colours.
-
-So `apply` stops instead, and writes nothing:
-
-```
-Not applied: the install holds 3 key(s) this baseline has never seen, in
-TouchColors (3); applying would drop them and nothing can put them back. Run
-`tdtheme capture --local` to re-baseline your own build, or pass
---allow-unknown to drop them deliberately.
-```
-
-`tdtheme capture --local` re-baselines into `baseline.local/` — a gitignored,
-per-machine copy that every later command prefers over the committed `baseline/`.
-After that those keys are ordinary baseline keys, `tdtheme reset` handles them
-correctly, and the check stops firing. Delete the directory to go back to the
-shipped baseline.
-
-Because the refusal writes nothing, **it is safe to ignore and come back to**:
-whatever the apply was going to do, you can still do it after re-baselining.
-`--allow-unknown` is the other way past it, for the case where the extra keys
-really are junk you want gone rather than kept.
-
-Only keys the *last applied theme* did not write are treated this way. A key one
-of your own themes added is not blocked — it is in the install because this tool
-put it there, so dropping it when you switch themes is the intended behaviour
-and not loss. `tests/test_tdtheme.py` pins both halves, including that a theme
-which adds a key is still dropped by the next one.
 
 ### The accepted value syntax
 
 `tdtheme` is standard-library-only, so it reads overlays with its own small
-parser rather than a YAML library. It is deliberately **not** general YAML, and
-it is strict on purpose: a theme must install the same bytes whichever
-interpreter runs the tool, so anything ambiguous is refused rather than guessed.
+parser rather than a YAML library. Touchdesigner usually packages the pyyaml library though so it shouldn't really matter.
 
 | form | example | |
 |---|---|---|
-| double-quoted string | `key: "text"` | ✅ |
-| bare scalar | `key: 11` | ✅ |
-| list, quoted items | `key: ["a", "b"]` | ✅ the usual way to write a colour |
-| comments and blank lines | `# note` | ✅ |
-| single-quoted | `key: 'text'` | ❌ refused |
-| list, bare items | `key: [a, b]` | ❌ refused |
-| flow mapping | `key: {a: 1}` | ❌ refused |
-| anchor / alias | `a: &x 1`, `b: *x` | ❌ refused |
-| block scalar | `key: \|` | ❌ refused |
+| double-quoted string | `key: "text"` | this is how you do it
+| bare scalar | `key: 11` | acceptable
+| list, quoted items | `key: ["a", "b"]` | this is how you do it
+| single-quoted | `key: 'text'` | bad
+| list, bare items | `key: [a, b]` | bad
+| flow mapping | `key: {a: 1}` | bad
+| anchor / alias | `a: &x 1`, `b: *x` | bad
+| block scalar | `key: \|` | bad
 
-Two rows earn their keep.
 
-**Single quotes** are the one people reach for, and they are refused on purpose.
-A YAML-aware reader strips them; this parser cannot, so accepting them would
-write `'text'` — quotes included — into the store, and a quoted `.size` value
-becomes a geometry TouchDesigner cannot parse. Write `"text"` or bare `text`.
 
-**Bare list items** (`[a, b]`) look equivalent to `["a", "b"]` and are not:
-they are valid YAML but not valid JSON, and this parser only reads lists whose
-items are quoted. Quote the items.
 
-Everything outside the table is refused with a message naming the construct,
-rather than partially understood. That is the design: a refused overlay is a
-five-second fix, whereas a misread one installs a theme that looks applied and
-is not. A leading `-` is fine (`key: -0.5`), since a bare `-` is not a
-construct without a space after it.
-
-To build one by hand, copy `themes/midnight/` and edit the YAML. To capture
+To build one by hand, copy `themes/midnight/` and edit the YAML. T
+o capture
 what you have currently set in TouchDesigner as a new theme, use
 `tdthememaker/` - see [Writing themes](#writing-themes).
 
 ## Icons
 
-The 97 glyphs in `Config/Icons/` are themed too, and they work differently from
+The 97 icons in `Config/Icons/` are themed too, and they work differently from
 the two stores.
 
 **They are not a sparse overlay, and a theme cannot leak another theme's
