@@ -1,6 +1,6 @@
 # tdtheme
 
-A theme manager for TouchDesigner on macOS. Allows you to apply themes to your touchdesigner to change everything (yes everything) about the way it looks.
+A theme manager CLI (command line interface) for TouchDesigner on macOS. Allows you to apply themes to your touchdesigner to change everything (yes everything) about the way it looks, all from your console! 
 #### Origins and AI use:
  *A large amount of the infrastructure and file management aspect of this system is vibecoded, but much of the reverse engineering was by me, as well as the themes. Originally designed to be just a tool that I used for doing theme stuff, I thought it could be a thing that people would enjoy, so here it is. Enjoy!*
 
