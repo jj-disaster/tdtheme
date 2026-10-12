@@ -553,9 +553,16 @@ Traps this port paid for, so the next one does not:
   is interpreted line by line from disk (unlike the sh wrapper, which
   `exec`s Python and is gone), so removing the invoking shim makes cmd.exe
   end with "The batch file cannot be found" and exit 1 - after every step
-  including the closing summary has completed. The work is done; only the
-  exit code lies. `setup.cmd --uninstall` is unaffected (it lives in the
-  checkout, not the bin dir) and exits 0.
+  including the closing summary has completed. The fix is a deferred
+  self-delete: the shim tags itself through `TDTHEME_INVOKED_SHIM`, uninstall
+  skips it in the unlink loop, and a background helper deletes it once the
+  parent shell is done - event-driven through `Wait-Process`, 15 s timeout
+  backstop for interactive shells, never a sleep. Two traps inside the fix:
+  `DETACHED_PROCESS` silently runs nothing at all (exit 0, empty output,
+  file kept - measured twice), so the helper stays attached under
+  `CREATE_NEW_PROCESS_GROUP`; and "ours" in `shim_state` means this checkout
+  *and* the current generation, so a reinstall replaces tagless shims
+  instead of reporting them healthy.
 
 ## Traps in this codebase
 

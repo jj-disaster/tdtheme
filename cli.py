@@ -348,6 +348,53 @@ def _shim_points_here(text: str) -> bool:
     return False
 
 
+def _same_file(first: str, second: str) -> bool:
+    """True when two spellings name one file.
+
+    normcase makes `C:/x` and `c:\\x` agree; that is the whole job, since a
+    shim embeds a backslash path while a PATH scan yields forward slashes.
+    """
+    return (os.path.normcase(os.path.normpath(os.path.abspath(first)))
+            == os.path.normcase(os.path.normpath(os.path.abspath(second))))
+
+
+def _defer_self_delete(path: Path) -> bool:
+    """Schedule the invoking shim's removal after our parent shell is done.
+
+    A `.cmd` is read line by line from disk, so unlinking the shim this
+    process was launched from makes cmd.exe fail resuming ("The batch file
+    cannot be found") even though every step completed. Instead a background
+    helper waits for the parent shell - event-driven through Wait-Process,
+    with a timeout backstop for interactive shells that never exit - and
+    deletes then. True when the helper launched; on launch failure the caller
+    falls back to telling the user, never to a synchronous delete, which is
+    the failure being avoided.
+
+    The helper must stay attached to the console: DETACHED_PROCESS was tried
+    first and silently runs nothing at all (exit 0, empty output, file kept -
+    measured twice, no error anywhere). CREATE_NEW_PROCESS_GROUP keeps it out
+    of Ctrl+C's way without detaching it.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        parent = os.getppid()
+    except OSError:
+        return False
+    quoted = "'" + str(path).replace("'", "''") + "'"
+    script = (f"try {{ Wait-Process -Id {int(parent)} -Timeout 15 }} catch {{}}; "
+              f"Remove-Item -LiteralPath {quoted} -ErrorAction SilentlyContinue")
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-Command", script],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    except OSError:
+        return False
+    return True
+
+
 def _installed_links():
     """The installs on PATH that point into this checkout.
 
@@ -443,7 +490,24 @@ def cmd_uninstall(args) -> int:
     failures = 0
     if not links:
         print("\nNo links to this checkout on PATH.")
+    # The shim this process was launched from, if any: the shims tag
+    # themselves through TDTHEME_INVOKED_SHIM, and only a shim sets it.
+    invoked = os.environ.get("TDTHEME_INVOKED_SHIM")
     for path in links:
+        if (invoked and sys.platform == "win32"
+                and _same_file(str(path), invoked)):
+            # Unlinking it here breaks cmd.exe's resume ("The batch file
+            # cannot be found") - the file is read line by line from disk,
+            # unlike a sh wrapper, which execs Python and is gone. Hand it
+            # to a detached helper instead; it goes away on shell exit.
+            if _defer_self_delete(Path(path)):
+                print(f"  {path} will be removed on exit")
+                continue
+            failures += 1
+            print(f"  PROBLEM  could not schedule {path} for removal: "
+                  f"delete it by hand, or re-run ./setup --uninstall",
+                  file=sys.stderr)
+            continue
         try:
             path.unlink()
             print(f"  removed {path}")
