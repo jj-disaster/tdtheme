@@ -484,6 +484,72 @@ moved underneath it. A hand-arranged UI is the one thing here that is **not**
 recoverable — it exists only where the user put it. Copy it into a theme folder,
 not into `backups/`.
 
+## Windows port (one repo, branched mechanism)
+
+The port lives in this checkout, not a fork, and that is settled: the shipped
+data (baseline, themes, recipes, icons) is platform-independent and dwarfs the
+platform code, and every divergence guard in this file exists because a second
+copy of shared logic drifts. `setup` branches once on `uname` (MINGW/MSYS/
+CYGWIN); the macOS path is otherwise untouched, and the suites that pin it run
+where they always ran.
+
+What differs, all measured on build 2025.33230:
+
+- **Layout.** `Config/` sits directly under `C:\Program Files\Derivative\
+  TouchDesigner` (no app bundle). Version comes from `bin\TouchDesigner.exe`'s
+  ProductVersion (`0.99.2025.33230`), regexed to the `2025.33230` build pair;
+  running processes come from `tasklist /FI ... /FO CSV`, parsed as CSV-ish
+  text. All three live behind the same `td_version()` / `td_running()` /
+  `config_dir()` names, so everything above them is shared.
+- **Writes need privileges.** `apply` to Program Files without elevation fails
+  in `write_file`'s temp write - before the rename, so the install is
+  byte-identical afterwards (measured, not assumed). The supported one-timer
+  is an elevated `icacls ... /grant "${env:USERNAME}:(OI)(CI)M" /T` on the
+  Config tree; afterwards unelevated applies work.
+- **Shims, not symlinks.** Native shells cannot exec sh and symlinks need
+  privileges, so `setup` generates `.cmd` shims that call back into the
+  checkout (single-copy property kept) and PATHEXT keeps the prompt as
+  `tdtheme`. Identity is a marker line naming the checkout - the readlink
+  contract - compared through normcase/normpath, and `_installed_links`
+  finds them alongside symlinks, so `uninstall` removes exactly its own.
+  `setup.cmd` is the native entry point (double-clickable): it finds Git
+  Bash, delegates shim creation to `./setup` so there is one implementation,
+  then appends the user PATH through .NET (no `setx` length limit) and
+  requests the Config write grant through one UAC elevation. The elevation
+  click itself is review-verified only - UAC needs a human, so no suite or
+  script can drive that branch; everything around it (detection, retest,
+  manual fallback text) is exercised.
+  `check-td-writes` runs through `check_td_writes.py`, a portable twin
+  sharing the sh script's snapshot file and format (either can check the
+  other's record); the Icons digest concatenates in sorted-name order to
+  match `cat` in a C locale.
+- **TouchDesigner on Windows writes none of the three either.** Measured
+  2026-10-12: record, full session, graceful quit, check - all same. Same
+  build as the macOS measurement, and TouchColors is byte-identical across
+  the two (`10da545f...`); TouchOptions is not (`41c2eaeb...` vs `fc86c3e8...`),
+  so a per-platform diff there is expected, not drift.
+- **The suites abort at the wrapper section on native Windows.**
+  `WinError 193` - CreateProcess cannot exec `#!/bin/sh` - ends
+  `test_tdtheme.py` and `test_thememaker.py` after the `ui.tox` / export
+  sections; everything before that passes under both the system interpreter
+  and TouchDesigner's. Those sections need Git Bash (or a harness that execs
+  through `sh`) and that is an environment gap, not a code failure.
+
+Traps this port paid for, so the next one does not:
+
+- **`sorted(glob(...))` is not byte order on Windows.** `PureWindowsPath`
+  compares case-insensitively, so the concat hash silently reordered versus
+  `cat` (`Help.tiff` before `HSV24x24.tiff`). Sort by `p.name` explicitly
+  whenever the order is the hash. Caught by comparing against `md5sum`,
+  not by any suite - no suite hashes the live install.
+- **`set -u` meets unset `$ProgramFiles`.** Git Bash does not always import
+  it; `${ProgramFiles:-}` everywhere, in all three sh files, not just setup.
+- **A loop at the wrong indent checks one directory.** The shim scan in
+  `_installed_links` was placed after the `for entry` loop instead of inside
+  it, so uninstall only ever examined PATH's last entry - found by running a
+  real uninstall, which reported "no links" with two shims on PATH. Read the
+  nesting, not the names.
+
 ## Traps in this codebase
 
 These cost time. They are properties of the code, not opinions.

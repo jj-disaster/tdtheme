@@ -326,8 +326,30 @@ def _split_counts(out):
     return int(parts[0]), int(parts[1])
 
 
+# The marker line setup embeds in a generated Windows shim, followed by the
+# checkout it points at. Matched by _installed_links so `uninstall` removes
+# only shims this checkout owns.
+_SHIM_MARKER = "rem tdtheme-setup-shim "
+
+
+def _shim_points_here(text: str) -> bool:
+    """True when a `.cmd` shim was generated for this checkout.
+
+    Compared through normcase/normpath so `C:/...` and `c:\\...` spellings of
+    one directory agree; that is the whole job, since the shim embeds a
+    backslash path while T.root resolves with forward slashes.
+    """
+    here = os.path.normcase(os.path.normpath(os.path.realpath(T.root)))
+    for line in text.splitlines():
+        if line.startswith(_SHIM_MARKER):
+            claimed = line[len(_SHIM_MARKER):].strip().strip('"')
+            if claimed and os.path.normcase(os.path.normpath(claimed)) == here:
+                return True
+    return False
+
+
 def _installed_links():
-    """The symlinks on PATH that point into this checkout.
+    """The installs on PATH that point into this checkout.
 
     Found by reading PATH rather than by trusting a recorded list, so it
     reports what is actually there now. A stale record would remove links that
@@ -364,6 +386,19 @@ def _installed_links():
                     found.append(path)
             except OSError:
                 continue
+        # Windows shims: generated `.cmd` files, identified by the marker line
+        # setup embeds naming the checkout they point at. A foreign .cmd with
+        # our command's name is not ours to delete, same as a foreign symlink.
+        for name in ("tdtheme.cmd", "tdthememaker.cmd", "check-td-writes.cmd"):
+            path = Path(entry) / name
+            try:
+                if not path.is_file() or path.is_symlink():
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _shim_points_here(text):
+                found.append(path)
     # PATH can name the same directory twice, and one link per command is all
     # there is to remove. Sorted so the output is stable run to run.
     return sorted(set(found))

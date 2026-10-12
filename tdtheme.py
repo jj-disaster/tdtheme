@@ -28,6 +28,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -103,8 +104,28 @@ class UnknownKeysError(ThemeError):
 
 # Paths --------------------------------------------------------------------
 
-TD_APP = Path("/Applications/TouchDesigner.app")
-TD_CONFIG = TD_APP / "Contents/Resources/tfs/Config"
+def _default_app_dir() -> Path:
+    """Where TouchDesigner lives by default on this platform.
+
+    macOS: an app bundle. Windows (incl. Git Bash, where sys.platform is
+    still "win32"): C:\\Program Files\\Derivative\\TouchDesigner, whose
+    Config/ sits directly under the install root.
+    """
+    if sys.platform == "win32":
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        return Path(program_files) / "Derivative" / "TouchDesigner"
+    return Path("/Applications/TouchDesigner.app")
+
+
+def _default_config_dir() -> Path:
+    app = _default_app_dir()
+    if sys.platform == "win32":
+        return app / "Config"
+    return app / "Contents/Resources/tfs/Config"
+
+
+TD_APP = _default_app_dir()
+TD_CONFIG = _default_config_dir()
 
 TOUCHCOLORS = "TouchColors"
 TOUCHOPTIONS = "TouchOptions"
@@ -664,7 +685,9 @@ def validate(target: TdFile, baseline: TdFile) -> "list[Finding]":
 # TouchDesigner environment ------------------------------------------------
 
 def td_version() -> "str | None":
-    """CFBundleShortVersionString, e.g. '2025.33230'."""
+    """Installed TouchDesigner build, e.g. '2025.33230'."""
+    if sys.platform == "win32":
+        return _windows_td_version()
     plist = TD_APP / "Contents" / "Info.plist"
     try:
         with plist.open("rb") as handle:
@@ -673,8 +696,35 @@ def td_version() -> "str | None":
         return None
 
 
+def _windows_td_version() -> "str | None":
+    """Build string from the install's exe ProductVersion.
+
+    Observed: ProductVersion "0.99.2025.33230" for build 2025.33230, so the
+    year.build pair is extracted rather than returning the whole string.
+    PowerShell is used because reading a PE version resource is otherwise a
+    ctypes exercise; absence/failure reads as "unknown", not an error.
+    """
+    exe = TD_APP / "bin" / "TouchDesigner.exe"
+    if not exe.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-Item '{exe}').VersionInfo.ProductVersion"],
+            capture_output=True, text=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (result.stdout or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(\d{4}\.\d+)", text)
+    return match.group(1) if match else text
+
+
 def td_running() -> "list[int]":
     """PIDs of running TouchDesigner processes. Empty when closed."""
+    if sys.platform == "win32":
+        return _windows_td_running()
     try:
         result = subprocess.run(["pgrep", "-x", "TouchDesigner"],
                                 capture_output=True, text=True, check=False)
@@ -684,6 +734,24 @@ def td_running() -> "list[int]":
     for token in result.stdout.split():
         if token.isdigit():
             pids.append(int(token))
+    return pids
+
+
+def _windows_td_running() -> "list[int]":
+    """PIDs via tasklist CSV. Missing tasklist reads as "none running"."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq TouchDesigner.exe",
+             "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for line in result.stdout.splitlines():
+        cells = [c.strip().strip('"') for c in line.split('","')]
+        if len(cells) >= 2 and cells[0].lower() == "touchdesigner.exe" \
+                and cells[1].isdigit():
+            pids.append(int(cells[1]))
     return pids
 
 

@@ -45,6 +45,14 @@ export PYTHONPATH
 # either. Two copies of it rather than a shared sourced file, because a missing
 # or renamed common file would break both commands at once, and the tests hold
 # the two in agreement instead.
+#
+# The no-interpreter advice branches on Windows the same way `tdtheme`'s does.
+on_windows() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    esac
+    return 1
+}
 usable() {
     command -v "$1" >/dev/null 2>&1 && "$1" -c '' >/dev/null 2>&1
 }
@@ -52,7 +60,9 @@ usable() {
 py=python3
 if ! usable "$py"; then
     for candidate in \
-        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3 \
+        "/c/Program Files/Derivative/TouchDesigner/bin/python.exe" \
+        "${ProgramFiles:-}/Derivative/TouchDesigner/bin/python.exe"
     do
         if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
             py=$candidate
@@ -61,7 +71,11 @@ if ! usable "$py"; then
     done
 fi
 if ! usable "$py"; then
-    if command -v python3 >/dev/null 2>&1; then
+    if on_windows; then
+        echo "tdthememaker: no working Python found." >&2
+        echo "tdthememaker: install Python 3 from python.org, or install" >&2
+        echo "tdthememaker: TouchDesigner - it ships its own Python - then try again." >&2
+    elif command -v python3 >/dev/null 2>&1; then
         echo "tdthememaker: the python3 on your PATH is present but does not run." >&2
         echo "tdthememaker: that is the Command Line Tools stub. Install the real" >&2
         echo "tdthememaker: one with 'xcode-select --install'." >&2

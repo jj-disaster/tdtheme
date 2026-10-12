@@ -168,7 +168,7 @@ for item in resized[:5]:
 # that ignores TDTHEME_CONFIG, so it also leaked out of this suite's isolation;
 # and it failed the moment anyone applied a theme, treating normal, correct use
 # of the tool as a broken baseline. Asserting the install is unthemed is not.
-live = Path("/Applications/TouchDesigner.app/Contents/Resources/tfs/Config") / T.ICONS_DIRNAME
+live = T.TD_CONFIG / T.ICONS_DIRNAME
 if live.is_dir():
     held = "the baseline (stock)"
     for theme in T.list_themes():

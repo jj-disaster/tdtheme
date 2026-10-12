@@ -7,6 +7,8 @@ A theme manager CLI (command line interface) for TouchDesigner on macOS. Allows 
 
 ## Installation
 
+### macOS
+
 Only requires macOS, git, and Touchdesigner
 
 ```sh
@@ -16,6 +18,24 @@ git clone https://github.com/jj-disaster/tdtheme.git
 cd tdtheme
 ./setup #optional to put onto path, allows you to use commands
 ```
+
+### Windows
+
+Only requires Windows, git, and Touchdesigner
+
+```cmd
+git clone https://github.com/jj-disaster/tdtheme.git
+#if you haven't installed git, grab it from git-scm.com first :)
+#then try the command again
+cd tdtheme
+setup.cmd #optional to put onto path, allows you to use commands
+#it asks for admin once so apply can write to TouchDesigner,
+#and falls back to TouchDesigner's own python so you don't need one :)
+```
+
+If you skip the admin prompt, `apply` can't write until you grant it once
+from an elevated prompt:
+`icacls 'C:\Program Files\Derivative\TouchDesigner\Config' /grant "${env:USERNAME}:(OI)(CI)M" /T`
 ### Basic Commands
 
 ```sh

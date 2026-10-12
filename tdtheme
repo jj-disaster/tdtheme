@@ -26,6 +26,15 @@ here=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
 # means TouchDesigner is installed, and it always ships a full CPython with PyYAML
 # alongside, so this is a dependency the user already has rather than a new one.
 # Checked explicitly and first-listed after python3 so a working PATH still wins.
+#
+# On Windows (Git Bash) the fallback is TouchDesigner's Windows install; the
+# advice below branches the same way, because `xcode-select` is nonsense there.
+on_windows() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    esac
+    return 1
+}
 py=python3
 # "It exists on PATH" is not the same question as "it runs", and the stub is
 # exactly the case where they disagree: a 118 KB executable that opens an
@@ -42,7 +51,9 @@ usable() {
 
 if ! usable "$py"; then
     for candidate in \
-        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3 \
+        "/c/Program Files/Derivative/TouchDesigner/bin/python.exe" \
+        "${ProgramFiles:-}/Derivative/TouchDesigner/bin/python.exe"
     do
         if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
             py=$candidate
@@ -55,7 +66,11 @@ if ! usable "$py"; then
     # to know that is what they have - the symptom is the same either way, and
     # "no python3 found" is the wrong sentence for a python3 that is right there
     # and does nothing.
-    if command -v python3 >/dev/null 2>&1; then
+    if on_windows; then
+        echo "tdtheme: no working Python found." >&2
+        echo "tdtheme: install Python 3 from python.org, or install" >&2
+        echo "tdtheme: TouchDesigner - it ships its own Python - then try again." >&2
+    elif command -v python3 >/dev/null 2>&1; then
         echo "tdtheme: the python3 on your PATH is present but does not run." >&2
         echo "tdtheme: that is the Command Line Tools stub. Install the real one" >&2
         echo "tdtheme: with 'xcode-select --install'." >&2

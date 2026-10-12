@@ -10,6 +10,9 @@
 # a symlink keeps one copy of your theme data and always reflects the current
 # checkout. An installed copy would be a second, silently-drifting copy of the
 # same themes, and `apply` would install from whichever one it found first.
+# On Windows (Git Bash) it writes generated `.cmd` shims instead of symlinks,
+# which call back into the checkout the same way - native shells cannot exec
+# sh scripts, and symlinks need privileges. The user still types `tdtheme`.
 #
 # Everything it does is reversible, and everything it changes it reports. The
 # exit status is 0 only if all three links are in place and `tdtheme status`
@@ -45,6 +48,19 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
 MODE=install
 TARGET_DIR=""
 PROG=setup
+
+# Windows (Git Bash) is a different install mechanism, not a different tool:
+# native shells cannot exec a sh script, and creating a symlink needs
+# privileges. Everything below branches on this once, and the macOS path is
+# otherwise untouched.
+ON_WINDOWS=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) ON_WINDOWS=1 ;;
+esac
+
+on_windows() {
+    [ "$ON_WINDOWS" = 1 ]
+}
 
 say()  { printf '%s\n' "$*"; }
 step() { printf '  %s\n' "$*"; }
@@ -101,7 +117,9 @@ find_python() {
     fi
     debug "python3 on PATH: $(command -v python3 2>/dev/null || echo none)"
     for candidate in \
-        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3
+        /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3 \
+        "/c/Program Files/Derivative/TouchDesigner/bin/python.exe" \
+        "${ProgramFiles:-}/Derivative/TouchDesigner/bin/python.exe"
     do
         if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
             printf '%s\n' "$candidate"
@@ -115,21 +133,32 @@ PYTHON=$(find_python) || PYTHON=""
 if [ -z "$PYTHON" ]; then
     bad "no working python3, so nothing installed here would run"
     why ""
-    why "  TouchDesigner ships a full Python 3.11 and the wrappers fall back to"
-    why "  it automatically - but that was not found either, which usually means"
-    why "  TouchDesigner is not in /Applications."
-    why ""
-    why "  Fix it with either of:"
-    why "    xcode-select --install        # installs a real python3"
-    why "    move TouchDesigner to /Applications"
+    if on_windows; then
+        why "  TouchDesigner ships its own Python and the shims fall back to"
+        why "  it automatically - but that was not found either, which usually"
+        why "  means TouchDesigner is not installed in the default location."
+        why ""
+        why "  Fix it with either of:"
+        why "    install Python 3 from python.org"
+        why "    install TouchDesigner to C:\\Program Files\\Derivative\\TouchDesigner"
+    else
+        why "  TouchDesigner ships a full Python 3.11 and the wrappers fall back to"
+        why "  it automatically - but that was not found either, which usually means"
+        why "  TouchDesigner is not in /Applications."
+        why ""
+        why "  Fix it with either of:"
+        why "    xcode-select --install        # installs a real python3"
+        why "    move TouchDesigner to /Applications"
+    fi
     exit 2
 fi
 debug "interpreter: $PYTHON ($($PYTHON -V 2>&1))"
 
 # ------------------------------------------------- preflight: TouchDesigner
 TD_APP=/Applications/TouchDesigner.app
-if [ ! -d "$TD_APP" ]; then
-    info "TouchDesigner not found at $TD_APP"
+WIN_TD_APP="/c/Program Files/Derivative/TouchDesigner"
+if [ ! -d "$TD_APP" ] && [ ! -d "$WIN_TD_APP" ] && [ ! -d "${ProgramFiles:-}/Derivative/TouchDesigner" ]; then
+    info "TouchDesigner not found at $TD_APP (macOS) or $WIN_TD_APP (Windows)"
     info "the links will be created, but apply will have nowhere to write"
 else
     debug "TouchDesigner: present"
@@ -274,6 +303,265 @@ install_one() {
     return 0
 }
 
+# ------------------------------------------------------- Windows shims (.cmd)
+#
+# On Windows setup writes generated `.cmd` shims instead of symlinks. A shim
+# calls back into this checkout, so the single-copy property holds the same
+# way a symlink's does, and PATHEXT makes the extension invisible at the
+# prompt: the user still types `tdtheme status`.
+#
+# A shim identifies itself with a marker line naming the checkout it points
+# at, which is what makes a stale shim replaceable and a foreign file a
+# refusal - the same contract symlinks have via readlink.
+#
+# check-td-writes runs here too, through check_td_writes.py - a portable twin
+# of the sh script sharing its snapshot file and format, because a native
+# shell cannot exec sh and the hashing tools differ per platform (md5 -q is
+# macOS-only, pgrep is absent on Windows).
+WIN_COMMANDS="tdtheme tdthememaker check-td-writes"
+
+shim_name() {
+    case $1 in
+        tdtheme)         printf 'tdtheme.cmd\n' ;;
+        tdthememaker)    printf 'tdthememaker.cmd\n' ;;
+        check-td-writes) printf 'check-td-writes.cmd\n' ;;
+    esac
+    return 0
+}
+
+# Backslash form of a path, for embedding in a .cmd file. cygpath exists
+# under Git Bash; without it the POSIX form passes through, which Python on
+# Windows still accepts.
+win_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1" 2>/dev/null || printf '%s\n' "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+    return 0
+}
+
+# Resolved once per run, before any shim work: the checkout and the fallback
+# interpreter the shims embed. The fallback is TouchDesigner's bundled Python,
+# the same one the sh wrappers use; the shim's own probing prefers PATH first.
+windows_paths() {
+    SHIM_HERE=$(win_path "$HERE")
+    for candidate in \
+        "/c/Program Files/Derivative/TouchDesigner/bin/python.exe" \
+        "${ProgramFiles:-}/Derivative/TouchDesigner/bin/python.exe"
+    do
+        if [ -x "$candidate" ]; then
+            SHIM_PY=$(win_path "$candidate")
+            debug "shim fallback interpreter: $SHIM_PY"
+            return 0
+        fi
+    done
+    SHIM_PY=$(win_path "/c/Program Files/Derivative/TouchDesigner/bin/python.exe")
+    debug "shim fallback interpreter (may not exist): $SHIM_PY"
+    return 0
+}
+
+shim_marker_for() {
+    printf 'rem tdtheme-setup-shim %s' "$1"
+    return 0
+}
+
+# Classify a shim path: absent, ours, stale, symlink, directory, file.
+shim_state() {
+    path=$1
+    here_win=$2
+    if [ -L "$path" ]; then printf 'symlink\n'; return 0; fi
+    if [ -d "$path" ]; then printf 'directory\n'; return 0; fi
+    if [ ! -e "$path" ]; then printf 'absent\n'; return 0; fi
+    if grep -q -F "$(shim_marker_for "$here_win")" "$path" 2>/dev/null; then
+        printf 'ours\n'; return 0
+    fi
+    if grep -q -F 'rem tdtheme-setup-shim ' "$path" 2>/dev/null; then
+        printf 'stale\n'; return 0
+    fi
+    printf 'file\n'; return 0
+}
+
+# The probe runs the candidate rather than locating it, for the same reason
+# the sh wrappers do: a python that exists but does not run must not be
+# trusted. Quoted throughout, because both paths can hold spaces.
+shim_body() {
+    cmd=$1
+    printf '%s\r\n' "@echo off"
+    printf '%s\r\n' "$(shim_marker_for "$SHIM_HERE")"
+    printf '%s\r\n' "rem Generated by tdtheme setup. Re-run setup to refresh; do not edit."
+    printf '%s\r\n' "set \"TDTHEME_PY=python\""
+    printf '%s\r\n' "\"%TDTHEME_PY%\" -c \"\" >nul 2>&1"
+    printf '%s\r\n' "if errorlevel 1 set \"TDTHEME_PY=py\""
+    printf '%s\r\n' "\"%TDTHEME_PY%\" -c \"\" >nul 2>&1"
+    printf '%s\r\n' "if errorlevel 1 set \"TDTHEME_PY=$SHIM_PY\""
+    if [ "$cmd" = tdthememaker ]; then
+        printf '%s\r\n' "if defined PYTHONPATH (set \"PYTHONPATH=$SHIM_HERE;%PYTHONPATH%\") else (set \"PYTHONPATH=$SHIM_HERE\")"
+        printf '%s\r\n' "\"%TDTHEME_PY%\" -m tdthememaker.cli %*"
+    elif [ "$cmd" = check-td-writes ]; then
+        printf '%s\r\n' "\"%TDTHEME_PY%\" \"$SHIM_HERE\\check_td_writes.py\" %*"
+    else
+        printf '%s\r\n' "\"%TDTHEME_PY%\" \"$SHIM_HERE\\cli.py\" %*"
+    fi
+    return 0
+}
+
+windows_preflight() {
+    # The whole set before anything is created, same as the symlink path: a
+    # single blocking collision stops the run rather than leaving two of two
+    # installed and one refused.
+    for cmd in $WIN_COMMANDS; do
+        link_path="$TARGET_DIR/$(shim_name "$cmd")"
+        case $(shim_state "$link_path" "$SHIM_HERE") in
+            absent|ours|stale) ;;
+            symlink)
+                bad "$link_path is a symlink, and shims do not replace links"
+                note_failure
+                why "    Remove it by hand if it is yours, then re-run: ./setup"
+                ;;
+            directory)
+                bad "$link_path is a directory, and this tool did not put it there"
+                note_failure
+                why "    Move it aside if you are sure, then re-run: ./setup"
+                ;;
+            file)
+                bad "$link_path is a file this tool did not put there"
+                note_failure
+                why "    Move it aside if you are sure, then re-run: ./setup"
+                ;;
+        esac
+    done
+    if [ "$FAILURES" -gt 0 ]; then
+        why ""
+        why "Nothing has been created. The shims that would have been fine are"
+        why "still waiting, and no half-made install was left behind."
+        return 1
+    fi
+    return 0
+}
+
+install_shim() {
+    cmd=$1
+    bin_dir=$2
+    link_path="$bin_dir/$(shim_name "$cmd")"
+
+    case $(shim_state "$link_path" "$SHIM_HERE") in
+        ours)
+            ok "$(shim_name "$cmd") already points at this checkout"
+            return 0
+            ;;
+        stale)
+            info "$(shim_name "$cmd") points at another checkout - replacing it"
+            rm -f "$link_path" || { bad "could not remove the old $(shim_name "$cmd") shim"; note_failure; return 1; }
+            ;;
+        absent) ;;
+        *)
+            # Unreachable in install mode: the preflight above refuses these
+            # before anything is created. Kept so a direct call still refuses
+            # rather than clobbering.
+            bad "$link_path is blocked; re-run setup to see why"
+            note_failure
+            return 1
+            ;;
+    esac
+
+    tmp="$link_path.tmp$$"
+    if shim_body "$cmd" > "$tmp" 2>/dev/null && mv -f "$tmp" "$link_path" 2>/dev/null; then
+        ok "$(shim_name "$cmd") -> $SHIM_HERE"
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null
+    bad "could not write $link_path"
+    note_failure
+    why ""
+    why "    $bin_dir looks wrong for this. Either re-run with a directory you own:"
+    why "      ./setup \$HOME/.local/bin"
+    return 1
+}
+
+uninstall_shim() {
+    cmd=$1
+    bin_dir=$2
+    link_path="$bin_dir/$(shim_name "$cmd")"
+    if [ "$(shim_state "$link_path" "$SHIM_HERE")" != ours ]; then
+        info "$link_path is not a shim to this checkout; leaving it alone"
+        return 0
+    fi
+    rm -f "$link_path" && ok "removed $link_path" || bad "could not remove $link_path"
+    return 0
+}
+
+windows_verify() {
+    # The Windows half of the verification: the installed name, from a
+    # different directory, through the shim itself. Same contract as the
+    # symlink path - an absolute path so no other tdtheme can answer, and the
+    # target directory alone on PATH so the check cannot pass via inheritance.
+    for cmd in $WIN_COMMANDS; do
+        link_path="$TARGET_DIR/$(shim_name "$cmd")"
+        if [ "$(shim_state "$link_path" "$SHIM_HERE")" != ours ]; then
+            bad "$link_path is not a shim to this checkout"
+            note_failure
+        fi
+    done
+
+    if (cd "$VERIFY_DIR" && "$TARGET_DIR/tdtheme.cmd" --help) >/dev/null 2>&1; then
+        ok "tdtheme.cmd --help runs through the shim, from an unrelated directory"
+    else
+        bad "tdtheme.cmd does not run from $TARGET_DIR/tdtheme.cmd"
+        note_failure
+        why ""
+        why "    The usual cause is the interpreter probe at the top of the shim:"
+        why "      cat $TARGET_DIR/tdtheme.cmd"
+        why "    python, py and the TouchDesigner fallback all failed it."
+    fi
+
+    # The PATH question is advice, not a failure - same as the symlink path.
+    if (cd "$VERIFY_DIR" && PATH="$TARGET_DIR" command -v tdtheme.cmd) >/dev/null 2>&1; then
+        ok "found on a PATH of just $TARGET_DIR"
+    else
+        info "note: $TARGET_DIR is not on your PATH, so the bare name does not"
+        info "      work yet even though the shims themselves are correct."
+    fi
+    if ! on_path "$TARGET_DIR"; then
+        # Silent when setup.cmd owns the PATH step (it appends right after
+        # this through .NET); standalone Git Bash runs still need the line.
+        if [ -z "$TDSETUP_HANDLES_PATH" ]; then
+            say ""
+            say "    setx PATH \"%PATH%;$(win_path "$TARGET_DIR")\""
+            say ""
+            say "  Run that once, then open a new terminal. (It takes effect in new"
+            say "  terminals only, not this one. If setx complains about length, add"
+            say "  it under Settings > System > About > Advanced system settings.)"
+            say ""
+        fi
+    fi
+    return 0
+}
+
+# The closing summary, shared by both mechanisms; $1 names what --uninstall
+# removes ("links" vs "shims"). Always exits.
+closing_summary() {
+    what=$1
+    say ""
+    if [ "$FAILURES" -eq 0 ]; then
+        say "Done. From any directory:"
+        say ""
+        say "    tdtheme status          # check the install"
+        say "    tdtheme list            # see the themes"
+        say "    tdtheme apply midnight  # try one"
+        say "    tdtheme update          # pull changes from GitHub"
+        say ""
+        say "Remove with: tdtheme uninstall   (restores stock, keeps your themes)"
+        say "         or: ./setup --uninstall   (the $what only)"
+        exit 0
+    fi
+
+    why "$FAILURES problem(s) above. Nothing was left half-done:"
+    why "  re-run with SETUP_DEBUG=1 for a trace of every probe,"
+    why "  or ./setup --check to see the current state without changing it."
+    exit 1
+}
+
 # ----------------------------------------------------------------- uninstall
 uninstall_one() {
     cmd=$1
@@ -320,6 +608,13 @@ if [ -z "$TARGET_DIR" ]; then
     why ""
     why "  Make one and re-run, or pick the directory yourself:"
     why "    ./setup \$HOME/.local/bin"
+    if on_windows; then
+        why ""
+        why "  On Windows that is one command, then re-run:"
+        why "    mkdir \$HOME/.local/bin && ./setup \$HOME/.local/bin"
+        why "  and afterwards add it to your user PATH once:"
+        why "    setx PATH \"%PATH%;$(win_path "$HOME/.local/bin")\""
+    fi
     exit 2
     fi
 fi
@@ -328,12 +623,34 @@ say ""
 
 case $MODE in
     uninstall)
+        if on_windows; then
+            windows_paths
+            for cmd in $WIN_COMMANDS; do uninstall_shim "$cmd" "$TARGET_DIR"; done
+            say ""
+            [ "$FAILURES" -eq 0 ] && say "Shims removed." || say "$FAILURES problem(s) above."
+            exit "$([ "$FAILURES" -eq 0 ] && echo 0 || echo 1)"
+        fi
         for cmd in $COMMANDS; do uninstall_one "$cmd" "$TARGET_DIR"; done
         say ""
         [ "$FAILURES" -eq 0 ] && say "Links removed." || say "$FAILURES problem(s) above."
         exit "$([ "$FAILURES" -eq 0 ] && echo 0 || echo 1)"
         ;;
     check)
+        if on_windows; then
+            windows_paths
+            for cmd in $WIN_COMMANDS; do
+                link_path="$TARGET_DIR/$(shim_name "$cmd")"
+                case $(shim_state "$link_path" "$SHIM_HERE") in
+                    ours) step "$link_path: points at this checkout" ;;
+                    stale) step "$link_path: shim to another checkout - would be replaced" ;;
+                    absent) step "$link_path: would be created" ;;
+                    *) step "$link_path: $(shim_state "$link_path" "$SHIM_HERE") - would need removing first" ;;
+                esac
+            done
+            say ""
+            say "Nothing changed. Re-run without --check to do it."
+            exit 0
+        fi
         for cmd in $COMMANDS; do
             link_path="$TARGET_DIR/$cmd"
             case $(existing_kind "$link_path") in
@@ -348,7 +665,11 @@ case $MODE in
         ;;
 esac
 
-if [ "$MODE" = install ]; then
+if on_windows && [ "$MODE" = install ]; then
+    windows_paths
+    windows_preflight || exit 1
+    for cmd in $WIN_COMMANDS; do install_shim "$cmd" "$TARGET_DIR"; done
+elif [ "$MODE" = install ]; then
     # Preflight the whole set before creating anything.
     #
     # A single blocking collision - a directory, a file, anything this tool did
@@ -411,6 +732,14 @@ say "Verifying"
 VERIFY_DIR=$(mktemp -d 2>/dev/null || echo /tmp/tdtheme-setup.$$)
 mkdir -p "$VERIFY_DIR" 2>/dev/null
 
+# On Windows this verifies, prints the closing summary and exits, so the
+# symlink path below only ever runs where symlinks are the mechanism.
+if on_windows; then
+    windows_verify
+    rm -rf "$VERIFY_DIR" 2>/dev/null
+    closing_summary "shims"
+fi
+
 # Is what is in the bin dir actually pointing at this checkout?
 for cmd in $COMMANDS; do
     link_path="$TARGET_DIR/$cmd"
@@ -462,21 +791,4 @@ if ! on_path "$TARGET_DIR"; then
 fi
 rm -rf "$VERIFY_DIR" 2>/dev/null
 
-say ""
-if [ "$FAILURES" -eq 0 ]; then
-    say "Done. From any directory:"
-    say ""
-    say "    tdtheme status          # check the install"
-    say "    tdtheme list            # see the themes"
-    say "    tdtheme apply midnight  # try one"
-    say "    tdtheme update          # pull changes from GitHub"
-    say ""
-    say "Remove with: tdtheme uninstall   (restores stock, keeps your themes)"
-    say "         or: ./setup --uninstall   (the links only)"
-    exit 0
-fi
-
-why "$FAILURES problem(s) above. Nothing was left half-done:"
-why "  re-run with SETUP_DEBUG=1 for a trace of every probe,"
-why "  or ./setup --check to see the current state without changing it."
-exit 1
+closing_summary "links"
