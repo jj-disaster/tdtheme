@@ -549,6 +549,13 @@ Traps this port paid for, so the next one does not:
   it, so uninstall only ever examined PATH's last entry - found by running a
   real uninstall, which reported "no links" with two shims on PATH. Read the
   nesting, not the names.
+- **`tdtheme uninstall` on Windows deletes its own shim mid-run.** A `.cmd`
+  is interpreted line by line from disk (unlike the sh wrapper, which
+  `exec`s Python and is gone), so removing the invoking shim makes cmd.exe
+  end with "The batch file cannot be found" and exit 1 - after every step
+  including the closing summary has completed. The work is done; only the
+  exit code lies. `setup.cmd --uninstall` is unaffected (it lives in the
+  checkout, not the bin dir) and exits 0.
 
 ## Traps in this codebase
 
