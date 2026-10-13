@@ -534,6 +534,15 @@ What differs, all measured on build 2025.33230:
   sections; everything before that passes under both the system interpreter
   and TouchDesigner's. Those sections need Git Bash (or a harness that execs
   through `sh`) and that is an environment gap, not a code failure.
+- **The install lookup is explicitness-ordered, and the file half validates.**
+  `TDTHEME_APP` env, then the `set-install` file, then the Windows registry,
+  then the built-in default; `install_source()` names the winner so `--show`
+  and `status` can say why. The file half refuses a path with no Config
+  tree *before saving*, because a recorded wrong path strands every later
+  command. The registry half gates hits on a live Config tree and prefers a
+  Derivative-published entry, and reads absence as "no opinion" rather than
+  erroring. `TD_APP`/`TD_CONFIG` stay as import-time snapshots for the two
+  test files that read them; everything operational resolves per call.
 
 Traps this port paid for, so the next one does not:
 

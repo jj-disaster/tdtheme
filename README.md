@@ -36,6 +36,12 @@ setup.cmd #optional to put onto path, allows you to use commands
 If you skip the admin prompt, `apply` can't write until you grant it once
 from an elevated prompt:
 `icacls 'C:\Program Files\Derivative\TouchDesigner\Config' /grant "${env:USERNAME}:(OI)(CI)M" /T`
+
+TouchDesigner outside the default spot is found automatically (Windows
+registry) or set by hand: `tdtheme set-install "D:\TouchDesigner"` saves it
+for the checkout, `tdtheme set-install --show` says which install is active
+and why. A non-default spot with no system Python still needs `python3` on
+`PATH` - the bundled-interpreter fallback only knows the default path.
 ### Basic Commands
 
 ```sh
@@ -180,6 +186,7 @@ different case again: it cannot be edited at all, only installed whole. To modif
 | `diff NAME` | show exactly what a theme changes, old value vs new |
 | `apply NAME` | merge, validate, write (`--no-icons` to skip the icon set; `--backup` to keep a copy of the outgoing files; `--allow-unknown` to write despite keys this baseline has never seen; the `ui.tox` is always written) |
 | `reset` | back to stock: an alias for `apply default`, same flags |
+| `set-install [PATH]` | point the tool at a TouchDesigner install outside the default spot (`--show` prints the active one and why; `--clear` forgets it) |
 | `update` | `git pull` this checkout from its remote; refuses on uncommitted changes or a diverged branch |
 | `uninstall` | restore the stock UI and remove the commands from `PATH` (the checkout is kept) |
 | `icons list [NAME]` | the icon set, with size and digest per file (NAME omitted = baseline) |

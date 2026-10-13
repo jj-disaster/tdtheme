@@ -58,6 +58,16 @@ usable() {
 }
 
 py=python3
+# A custom install location (TDTHEME_APP, or `tdtheme set-install`) carries
+# its own interpreter: probe it before PATH, by running it like the rest.
+if [ -n "${TDTHEME_APP:-}" ]; then
+    for candidate in "$TDTHEME_APP/bin/python.exe" "$TDTHEME_APP/bin/python3"; do
+        if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
+            py=$candidate
+            break
+        fi
+    done
+fi
 if ! usable "$py"; then
     for candidate in \
         /Applications/TouchDesigner.app/Contents/Frameworks/Python.framework/Versions/*/bin/python3 \

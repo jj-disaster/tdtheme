@@ -46,6 +46,8 @@ __all__ = [
     "root", "baseline_dir", "baseline_shipped_dir", "baseline_shadow_dir",
     "baseline_is_shadowed",
     "themes_dir", "backups_dir", "config_dir",
+    "app_dir", "install_source", "save_install_dir", "clear_install_dir",
+    "validate_install_dir",
     "icons_dir", "baseline_icons_dir", "theme_icons_dir",
     "ui_tox_path", "baseline_ui_tox", "theme_ui_tox", "ui_tox_source",
     "td_version", "td_running",
@@ -104,6 +106,11 @@ class UnknownKeysError(ThemeError):
 
 # Paths --------------------------------------------------------------------
 
+#: Repository root. First, because the install lookup below reads the saved
+#: `set-install` file next to it, and `TD_APP = app_dir()` runs at import.
+root = Path(__file__).resolve().parent
+
+
 def _default_app_dir() -> Path:
     """Where TouchDesigner lives by default on this platform.
 
@@ -118,18 +125,184 @@ def _default_app_dir() -> Path:
 
 
 def _default_config_dir() -> Path:
-    app = _default_app_dir()
+    return _config_dir_for(_default_app_dir())
+
+
+def _config_dir_for(app: Path) -> Path:
+    """The Config tree under a given install root, per platform."""
     if sys.platform == "win32":
         return app / "Config"
     return app / "Contents/Resources/tfs/Config"
 
 
-TD_APP = _default_app_dir()
-TD_CONFIG = _default_config_dir()
-
+#: Store file names. First, alongside root: the install lookup below gates
+#: registry hits on the Config tree holding one, and it runs at import.
 TOUCHCOLORS = "TouchColors"
 TOUCHOPTIONS = "TouchOptions"
 STORE_FILES = (TOUCHCOLORS, TOUCHOPTIONS)
+
+
+#: Machine-local override written by `tdtheme set-install`: {"app_dir": ...}.
+#: An install path is meaningless on anyone else's machine, so gitignored
+#: like baseline.local/. Always written absolute by the command.
+INSTALL_FILENAME = ".tdtheme-install.json"
+
+
+def _stored_app_dir() -> "Path | None":
+    """The saved `set-install` location, or None when absent or unusable."""
+    try:
+        data = json.loads((root / INSTALL_FILENAME).read_text())
+        path = Path(data["app_dir"]).expanduser()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return path if path.is_absolute() else None
+
+
+def _registry_app_dir() -> "Path | None":
+    """TouchDesigner location from the Windows uninstall registry, if any.
+
+    Absence reads as "no opinion", never an error: a broken or missing
+    registry entry falls through to the built-in default, the same way an
+    unknown version reads as None rather than raising.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    views = [
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+        (winreg.HKEY_CURRENT_USER, 0),
+    ]
+    for hive, view in views:
+        try:
+            with winreg.OpenKey(
+                    hive,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                    0, winreg.KEY_READ | view) as uninstall:
+                found = _scan_uninstall_key(winreg, uninstall)
+        except OSError:
+            continue
+        if found is not None:
+            return found
+    return None
+
+
+def _scan_uninstall_key(winreg, uninstall) -> "Path | None":
+    """First TouchDesigner install under an Uninstall key with a live Config.
+
+    Several may match when builds sit side by side; one published by
+    Derivative wins over a bare name match, because the name alone could be
+    anything sharing the string.
+    """
+    generic: "Path | None" = None
+    index = 0
+    while True:
+        try:
+            name = winreg.EnumKey(uninstall, index)
+        except OSError:
+            return generic
+        index += 1
+        try:
+            with winreg.OpenKey(uninstall, name) as sub:
+                try:
+                    display = str(winreg.QueryValueEx(sub, "DisplayName")[0])
+                except OSError:
+                    continue
+                if "touchdesigner" not in display.lower():
+                    continue
+                try:
+                    publisher = str(winreg.QueryValueEx(sub, "Publisher")[0])
+                except OSError:
+                    publisher = ""
+                try:
+                    location = str(winreg.QueryValueEx(sub, "InstallLocation")[0])
+                except OSError:
+                    continue
+        except OSError:
+            continue
+        candidate = Path(location)
+        if not (candidate / "Config" / TOUCHCOLORS).is_file():
+            continue
+        if "derivative" in publisher.lower():
+            return candidate
+        if generic is None:
+            generic = candidate
+
+
+def install_source() -> "tuple[Path, str]":
+    """Where TouchDesigner lives, and why that answer won.
+
+    Precedence is explicitness: TDTHEME_APP env, then the `set-install` file,
+    then the Windows registry, then the built-in default. Every later
+    question - config dir, build string - flows from this one answer.
+    """
+    override = os.environ.get("TDTHEME_APP")
+    if override:
+        return Path(override).expanduser(), "TDTHEME_APP"
+    stored = _stored_app_dir()
+    if stored is not None:
+        return stored, "saved setting (tdtheme set-install)"
+    found = _registry_app_dir()
+    if found is not None:
+        return found, "Windows registry"
+    return _default_app_dir(), "built-in default"
+
+
+def app_dir() -> Path:
+    """Install root TouchDesigner lives under on this machine."""
+    return install_source()[0]
+
+
+def validate_install_dir(candidate: Path) -> "list[str]":
+    """Problems with a candidate install root; empty means usable.
+
+    Judged by the Config tree, not the executable: this tool reads and
+    writes the stores, the icons and ui.tox, so a directory holding those
+    is an install and one without them is not, whatever else it holds.
+    """
+    problems = []
+    if not candidate.exists():
+        return [f"no such directory: {candidate}"]
+    if not candidate.is_dir():
+        return [f"not a directory: {candidate}"]
+    config = _config_dir_for(candidate)
+    if not config.is_dir():
+        problems.append(f"no Config tree at {config} - not a TouchDesigner install")
+        return problems
+    for store in STORE_FILES:
+        if not (config / store).is_file():
+            problems.append(f"no {store} in {config}")
+    return problems
+
+
+def save_install_dir(path: Path) -> Path:
+    """Persist a custom install root. Raises ThemeError naming the problem."""
+    candidate = Path(os.path.expandvars(str(path))).expanduser()
+    if not candidate.is_absolute():
+        candidate = candidate.resolve()
+    problems = validate_install_dir(candidate)
+    if problems:
+        raise ThemeError("; ".join(problems))
+    write_file(root / INSTALL_FILENAME,
+               json.dumps({"app_dir": str(candidate)}, indent=2).encode() + b"\n")
+    return candidate
+
+
+def clear_install_dir() -> bool:
+    """Forget the saved location. True when one existed to remove."""
+    path = root / INSTALL_FILENAME
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+TD_APP = app_dir()
+TD_CONFIG = _config_dir_for(TD_APP)
 
 #: Files whose values are RGB triples rather than opaque strings.
 COLOR_FILES = frozenset({TOUCHCOLORS})
@@ -159,7 +332,6 @@ UI_TOX = "ui.tox"
 #: safe.
 DEFAULT_THEME = "default"
 
-root = Path(__file__).resolve().parent
 themes_dir = root / "themes"
 backups_dir = root / "backups"
 
@@ -182,10 +354,15 @@ def baseline_is_shadowed() -> bool:
 def config_dir() -> Path:
     """Where TouchDesigner actually keeps the two stores.
 
-    Overridable via TDTHEME_CONFIG, which is how the test-suite avoids the
-    real install.
+    TDTHEME_CONFIG wins outright, which is how the test-suite avoids the
+    real install; otherwise the Config tree under the resolved install
+    (see app_dir()), so `set-install` and the registry lookup take effect
+    without reimporting.
     """
-    return Path(os.environ.get("TDTHEME_CONFIG", TD_CONFIG))
+    override = os.environ.get("TDTHEME_CONFIG")
+    if override:
+        return Path(override)
+    return _config_dir_for(app_dir())
 
 
 def icons_dir() -> Path:
@@ -688,7 +865,7 @@ def td_version() -> "str | None":
     """Installed TouchDesigner build, e.g. '2025.33230'."""
     if sys.platform == "win32":
         return _windows_td_version()
-    plist = TD_APP / "Contents" / "Info.plist"
+    plist = app_dir() / "Contents" / "Info.plist"
     try:
         with plist.open("rb") as handle:
             return plistlib.load(handle).get("CFBundleShortVersionString")
@@ -704,7 +881,7 @@ def _windows_td_version() -> "str | None":
     PowerShell is used because reading a PE version resource is otherwise a
     ctypes exercise; absence/failure reads as "unknown", not an error.
     """
-    exe = TD_APP / "bin" / "TouchDesigner.exe"
+    exe = app_dir() / "bin" / "TouchDesigner.exe"
     if not exe.is_file():
         return None
     try:
@@ -1419,6 +1596,7 @@ def status() -> Status:
     baseline_present = _baseline_paths()[TOUCHCOLORS].exists()
     version = baseline_version()
     live = td_version()
+    install_path, install_via = install_source()
 
     drift: "dict[str, int]" = {}
     missing: "list[str]" = []
@@ -1456,6 +1634,8 @@ def status() -> Status:
         baseline_present=baseline_present,
         version_match=(baseline_present and version.get("td_build") == live),
         td_running=td_running(),
+        install_dir=install_path,
+        install_source=install_via,
         config_dir=config_dir(),
         themes=list_themes(),
         drift=drift,
@@ -1486,6 +1666,8 @@ class Status:
     icon_count: int = 0
     icon_drift: "dict[str, int]" = field(default_factory=dict)
     icon_theme_drift: "dict[str, int]" = field(default_factory=dict)
+    install_dir: "Path | None" = None
+    install_source: "str | None" = None
 
     @property
     def clean(self) -> bool:

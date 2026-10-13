@@ -281,6 +281,37 @@ def cmd_reset(args) -> int:
     return cmd_apply(args)
 
 
+def cmd_set_install(args) -> int:
+    """Point the tool at a TouchDesigner install outside the default spot.
+
+    The answer is saved next to the checkout (see T.INSTALL_FILENAME), so it
+    holds for every later command here and nobody else's checkout. Validation
+    happens before the save: a path with no Config tree is refused rather
+    than recorded, because a recorded wrong path strands every later command
+    somewhere that is not an install.
+    """
+    if args.show or (args.path is None and not args.clear):
+        path, via = T.install_source()
+        print(f"install dir       {path}")
+        print(f"                  from {via}")
+        print(f"config dir        {T.config_dir()}")
+        return EXIT_OK
+    if args.clear:
+        if T.clear_install_dir():
+            print("Forgot the saved location; back to lookup order.")
+        else:
+            print("No saved location; already on lookup order.")
+        return EXIT_OK
+    saved = T.save_install_dir(Path(args.path))
+    print(f"Pointing at {saved}")
+    _, via = T.install_source()
+    print(f"                  from {via}")
+    print(f"config dir        {T.config_dir()}")
+    live = T.td_version()
+    print(f"TouchDesigner     {live or 'not found - is that really an install?'}")
+    return EXIT_OK
+
+
 def _git(args, cwd):
     """Run git, returning (returncode, stdout, stderr). Never raises."""
     try:
@@ -663,6 +694,9 @@ def cmd_status(args) -> int:
     print(f"TouchDesigner     {state.td_version or 'not found'}")
     if state.td_running:
         print(f"                  RUNNING (pid {', '.join(map(str, state.td_running))})")
+    if state.install_dir is not None and state.install_source != "built-in default":
+        print(f"install dir       {state.install_dir}")
+        print(f"                  from {state.install_source}")
     print(f"config dir        {state.config_dir}")
     print(f"baseline          {'captured' if state.baseline_present else 'MISSING - run capture'}")
     if T.baseline_is_shadowed():
@@ -899,6 +933,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write even though the install holds keys this baseline "
                         "has never seen, which drops them")
     p.set_defaults(func=cmd_reset)
+
+    p = sub.add_parser("set-install",
+                       help="point the tool at a TouchDesigner install outside "
+                            "the default location")
+    p.add_argument("path", nargs="?",
+                   help="install root (the folder holding Config/)")
+    p.add_argument("--clear", action="store_true",
+                   help="forget the saved location and go back to lookup order")
+    p.add_argument("--show", action="store_true",
+                   help="print the active install and where the answer came from")
+    p.set_defaults(func=cmd_set_install)
 
     p = sub.add_parser("uninstall",
                        help="restore the stock UI and remove the commands from PATH; "

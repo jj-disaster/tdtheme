@@ -111,6 +111,16 @@ debug "checkout resolved to $HERE"
 # otherwise TouchDesigner's bundled one. A python3 that exists but cannot run -
 # the Command Line Tools stub, on a Mac with no CLT - counts as absent.
 find_python() {
+    # A custom install location carries its own interpreter, and an explicit
+    # TDTHEME_APP beats an implicit PATH - same precedence as the core lookup.
+    if [ -n "${TDTHEME_APP:-}" ]; then
+        for candidate in "$TDTHEME_APP/bin/python.exe" "$TDTHEME_APP/bin/python3"; do
+            if [ -x "$candidate" ] && "$candidate" -c '' >/dev/null 2>&1; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        done
+    fi
     if command -v python3 >/dev/null 2>&1 && python3 -c '' >/dev/null 2>&1; then
         command -v python3
         return 0
@@ -401,6 +411,7 @@ shim_body() {
     # replaced rather than kept, which shim_state enforces below.
     printf '%s\r\n' "set \"TDTHEME_INVOKED_SHIM=%~f0\""
     printf '%s\r\n' "set \"TDTHEME_PY=python\""
+    printf '%s\r\n' "if defined TDTHEME_APP set \"TDTHEME_PY=%TDTHEME_APP%\\bin\\python.exe\""
     printf '%s\r\n' "\"%TDTHEME_PY%\" -c \"\" >nul 2>&1"
     printf '%s\r\n' "if errorlevel 1 set \"TDTHEME_PY=py\""
     printf '%s\r\n' "\"%TDTHEME_PY%\" -c \"\" >nul 2>&1"

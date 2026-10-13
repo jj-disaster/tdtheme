@@ -1,6 +1,9 @@
 # Transient runtime state - regenerable, not source
 .applied.json
 .tdwrite-snapshot
+# A custom TouchDesigner location for this checkout, written by
+# `tdtheme set-install`. Machine-local by definition, like baseline.local/.
+.tdtheme-install.json
 __pycache__/
 *.pyc
 
